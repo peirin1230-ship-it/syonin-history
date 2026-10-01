@@ -120,10 +120,19 @@ def _encode(payload: dict) -> str:
     return base64.b64encode(gzip.compress(raw, 9)).decode("ascii")
 
 
-def write_viewer(p: Paths, path: Path, include_medis: bool) -> int:
+def write_viewer(p: Paths, path: Path, include_medis: bool, fragment: bool = False) -> int:
+    """ビューアHTMLを書き出す。fragment=True はドキュメント骨格なし（Artifact 公開用）。"""
     tpl = (Path(__file__).parent / "viewer_template.html").read_text(encoding="utf-8")
     b64 = _encode(build_payload(p, include_medis))
-    html = tpl.replace("__DATA_B64__", b64)
+    body = tpl.replace("__DATA_B64__", b64)
+    if fragment:
+        html = body
+    else:
+        i = body.index('<header class="top">')
+        html = ("<!doctype html>\n<html lang=\"ja\">\n<head>\n<meta charset=\"utf-8\">\n"
+                "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1, viewport-fit=cover\">\n"
+                "<style>body{margin:0}[hidden]{display:none!important}</style>\n"
+                + body[:i] + "</head>\n<body>\n" + body[i:] + "\n</body>\n</html>\n")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(html, encoding="utf-8")
     return len(html)
