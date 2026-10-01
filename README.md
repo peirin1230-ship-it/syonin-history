@@ -23,7 +23,11 @@
 
 ### 対象範囲と限界
 
-- **平成28年度後半〜現在の通知（テキストPDF）** を解析しています。平成20〜27年度の通知はスキャン画像のため、現時点では対象外です（OCR対応は今後の課題）。
+- **平成28年度後半〜現在の通知（テキストPDF）** は表をそのまま解析しています。
+- **平成20〜28年度前半の通知はスキャン画像** のため、OCR（tesseract）で読み取っています。
+  - 承認番号・製品コードは数字・英字専用のモデルで読み、テキスト期の通知と MEDIS にある既知の番号と照合して補正します（1〜2文字の誤読、JAN からの逆引き、チェックデジット）。照合できずチェックデジットも合わない製品コードは捨てています。
+  - 機能区分は、区分番号（3桁）と価格から当時の特定器材マスターのコードに当て、表示名はマスターの名称にしています（OCR の日本語は崩れやすいため）。
+  - ビューアでは OCR 由来の掲載に「OCR」の印が付きます。古い様式の訂正通知（「項目／誤／正」を文章で書く形式）は反映していません。
 - A1（包括）・A2（特定包括）・A3 は含みません（B・C・R区分のみ）。
 - 機能区分の変更は「同じ製品コードが、後の通知で同じ区分番号の別の機能区分に掲載された」ことで検出します。改定時の機能区分見直し（例: 令和6年6月の脊椎スクリュー（可動型）の細分化）はこれで拾えますが、製品が再掲載されずに区分だけが読み替えられたケースは、特定器材マスター側の名称変更・廃止としてのみ現れます。
 - 自動解析のため、最終確認は出典の通知PDF（ビューアからリンク）で行ってください。
@@ -48,6 +52,21 @@ python -m mdtrack show 30400BZX00034000   # ターミナルで履歴を表示
 | `docs/index.html` | 同じビューアの公的情報のみ版（共有・GitHub Pages 用） |
 | `output/syonin_history.xlsx` | 承認番号一覧／変更イベント／掲載明細／機能区分の価格履歴／通知一覧 |
 | `data/syonin.sqlite` | すべてのデータ（SQLite） |
+
+### OCR（スキャン画像の通知）
+
+OCR 結果は `data/parsed/` に入っているので、通常は再実行不要です。やり直す場合:
+
+```bash
+# tesseract 5 と日本語・英語の学習データ（tessdata_best の jpn / eng、tessdata_fast の jpn を jpn_fast として）を用意
+mkdir -p tessdata
+curl -L -o tessdata/jpn.traineddata https://raw.githubusercontent.com/tesseract-ocr/tessdata_best/main/jpn.traineddata
+curl -L -o tessdata/eng.traineddata https://raw.githubusercontent.com/tesseract-ocr/tessdata_best/main/eng.traineddata
+curl -L -o tessdata/jpn_fast.traineddata https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/main/jpn.traineddata
+pip install opencv-python-headless pypdfium2 numpy
+python -m mdtrack ocr --force     # 約4,600頁、2並列で3時間前後
+python -m mdtrack ocr-fix         # 補正だけやり直す（MEDIS を取り込んでいると精度が上がる）
+```
 
 ### MEDIS の取り込み（任意）
 
@@ -74,6 +93,9 @@ mdtrack/            本体（Python パッケージ）
   catmap.py         決定機能区分 → 特定器材コードの対応付け
   db.py             訂正の反映、イベント生成、SQLite 構築
   medis.py          MEDIS ダウンロードファイルの取込
+  ocr_notice.py     スキャン画像の通知の OCR（罫線検出・向き補正・セル単位の読取）
+  ocr_repair.py     OCR 結果の承認番号・製品コードの補正
+  tess.py           libtesseract を直接呼ぶラッパー
   export.py         Excel・HTMLビューアの出力
 data/manifest.json  通知の一覧（取得元URL・通知日・適用日）
 data/parsed/        通知ごとの解析結果キャッシュ（gzip JSON）

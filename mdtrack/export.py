@@ -84,7 +84,7 @@ def build_payload(p: Paths, include_medis: bool) -> dict:
                     r["flags"] or ""])
     evs: dict[str, list] = {}
     for r in con.execute("SELECT approval_no, date, type, title, detail, kubun, category_code, price_before, "
-                         "price_after, doc_id FROM events ORDER BY approval_no, date"):
+                         "price_after, doc_id, source FROM events ORDER BY approval_no, date"):
         evs.setdefault(r[0], []).append(list(r)[1:])
     prods: dict[str, list] = {}
     for r in con.execute("SELECT approval_no, product_code, product_name, MIN(effective_date), "
@@ -138,6 +138,14 @@ def write_viewer(p: Paths, path: Path, include_medis: bool, fragment: bool = Fal
     return len(html)
 
 
+_ILLEGAL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+
+
+def _xl(v):
+    """Excel に書けない制御文字（OCR の読取ゴミなど）を除く。"""
+    return _ILLEGAL.sub("", v) if isinstance(v, str) else v
+
+
 def write_excel(p: Paths, path: Path) -> None:
     from openpyxl import Workbook
     from openpyxl.styles import Alignment, Font, PatternFill
@@ -155,7 +163,7 @@ def write_excel(p: Paths, path: Path) -> None:
             c.fill, c.font = head_fill, head_font
             c.alignment = Alignment(vertical="center", wrap_text=True)
         for r in rows:
-            ws.append(list(r))
+            ws.append([_xl(v) for v in r])
         for i, w in enumerate(widths, start=1):
             ws.column_dimensions[get_column_letter(i)].width = w
         ws.freeze_panes = "A2"
@@ -181,11 +189,13 @@ def write_excel(p: Paths, path: Path) -> None:
     li = con.execute("SELECT l.effective_date, l.approval_no, l.sales_name, l.product_name, l.product_code, "
                      "l.applicant, l.setting, l.kubun, CASE l.action WHEN 'new' THEN '新規' WHEN 'add' THEN "
                      "'追加・変更' ELSE l.action END, l.category, l.category_code, l.price_unit, l.price, n.title, "
-                     "l.corrected_by FROM listing l LEFT JOIN notices n USING(doc_id) "
+                     "l.corrected_by, CASE l.ocr WHEN 1 THEN 'OCR' ELSE '' END, l.category_ocr "
+                     "FROM listing l LEFT JOIN notices n USING(doc_id) "
                      "ORDER BY l.effective_date, l.approval_no").fetchall()
     sheet("掲載明細", ["適用開始日", "承認番号", "販売名", "製品名", "製品コード", "保険適用希望者", "医科/歯科",
                     "区分", "掲載種別", "決定機能区分", "特定器材コード", "単位", "償還価格(円)", "掲載通知",
-                    "訂正通知ID"], li, [11, 19, 28, 34, 16, 24, 8, 6, 9, 50, 12, 10, 11, 50, 14])
+                    "訂正通知ID", "読取", "OCRの読取文字（機能区分）"], li,
+          [11, 19, 28, 34, 16, 24, 8, 6, 9, 50, 12, 10, 11, 50, 14, 6, 40])
     sh = con.execute("SELECT h.code, h.basic_name, h.name, h.beppyo, h.kubun_no, h.valid_from, h.price, h.unit, "
                      "h.abolish_date FROM ssk_history h WHERE h.code IN (SELECT DISTINCT category_code FROM listing) "
                      "ORDER BY h.code, h.valid_from").fetchall()

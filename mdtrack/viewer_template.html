@@ -244,6 +244,7 @@ td.r, th.r { text-align: right; }
     ["add", "機能区分の変更・追加あり", r => r.hasAdd],
     ["abol", "廃止済の機能区分あり", r => r.abol],
     ["corr", "訂正あり", r => r.hasCorr],
+    ["ocr", "OCR由来を含む", r => r.a[8].includes("OCR")],
     ["unk", "マスター未対応", r => r.unk],
     ["medis", "MEDISと差異あり", r => r.medisDiff],
     ["medisOnly", "MEDISのみ", r => r.medisOnly],
@@ -301,8 +302,9 @@ td.r, th.r { text-align: right; }
       ? `<div class="price">${yen(e[6])} → <b>${yen(e[7])}</b>${e[6] ? ` <span class="sub2" style="display:inline">（${(e[7] - e[6] >= 0 ? "+" : "") + ((e[7] - e[6]) / e[6] * 100).toFixed(1)}%）</span>` : ""}</div>` : "";
     const src = doc ? `<div class="src">出典: <a href="${esc(doc[1])}" target="_blank" rel="noopener">${esc(doc[0].replace(/［.*?］|（PDF：.*?）/g, ""))}</a></div>`
       : e[1] === "price_revision" || e[1] === "category_abolished" || e[1] === "category_renamed" ? `<div class="src">出典: 特定器材マスター（コード <span class="mono">${esc(e[5])}</span>）</div>` : "";
+    const ocr = e[9] === "notice_ocr" ? ` <span class="pill warn" title="スキャン画像の通知をOCRで読み取った掲載です。出典PDFで確認してください">OCR</span>` : "";
     return `<li class="ev-${esc(e[1])}"><div class="d">${esc(e[0])}</div><div class="rail"><span class="dot"></span></div>
-      <div class="body"><div class="t">${esc(e[2])}</div>${e[3] ? `<div class="x">${esc(e[3])}</div>` : ""}${price}${src}</div></li>`;
+      <div class="body"><div class="t">${esc(e[2])}${ocr}</div>${e[3] ? `<div class="x">${esc(e[3])}</div>` : ""}${price}${src}</div></li>`;
   }
 
   function renderApproval(no) {
@@ -341,7 +343,7 @@ td.r, th.r { text-align: right; }
         <h3>変更の時系列 <small>${evs.length} 件</small></h3>
         ${r.medisOnly ? `<p class="note">この承認番号は解析範囲の通知（平成28年度後半以降）にB・C区分での掲載がありません。上の機能区分はMEDISの登録内容です。</p>` : ""}
         <div class="legend">${Object.entries({ listing_new: "保険適用", category_changed: "機能区分の変更・追加", products_added: "製品追加", price_revision: "価格改定", category_abolished: "廃止", correction: "訂正" }).map(([k, v]) => `<span class="ev-${k}"><i></i>${v}</span>`).join("")}</div>
-        <ol class="timeline">${evs.map(e => evRow([e[0], e[1], e[2], e[3], e[4], e[5], e[6], e[7], e[8]])).join("")}</ol>
+        <ol class="timeline">${evs.map(e => evRow([e[0], e[1], e[2], e[3], e[4], e[5], e[6], e[7], e[8], e[9]])).join("")}</ol>
       </article>
       <article class="sheet">
         <h3>製品（製品コード） <small>${prods.length.toLocaleString()} 件・初掲載順</small></h3>
@@ -382,7 +384,8 @@ td.r, th.r { text-align: right; }
       <article class="sheet note">
         <h3>このデータについて</h3>
         <p>厚生労働省「医療機器の保険適用について」（毎月の保医発通知、一部訂正・差替を含む）のうち、B・C区分（特定保険医療材料）として掲載された行を承認番号ごとにまとめています。償還価格の改定・機能区分の廃止は、支払基金（現・医療情報基盤・診療報酬審査支払機構）の特定器材マスター全版と照合して表示しています。</p>
-        <p>平成27年度以前の通知はスキャン画像のため現在は対象外です。A1（包括）・A2（特定包括）は含みません。機能区分とマスターの対応は名称の類似度と価格で自動判定しているため、「マスター未対応」の行は通知の表記をそのまま表示しています。最終的な確認は出典の通知PDFで行ってください。</p>
+        <p>平成20〜28年度前半の通知はスキャン画像のため、OCR（文字認識）で読み取っています。承認番号と製品コードは既知の番号と照合して補正し、機能区分は区分番号と価格から当時の特定器材マスターの区分に当てています。これらの掲載には <span class="pill warn">OCR</span> の印を付けています。誤読が残っている可能性があるので、出典PDFで確認してください。この時期の古い様式の訂正通知（「項目／誤／正」を文章で書く形式）は反映していません。</p>
+        <p>A1（包括）・A2（特定包括）は含みません。機能区分とマスターの対応は名称の類似度と価格で自動判定しているため、「マスター未対応」の行は通知の表記をそのまま表示しています。</p>
       </article>`;
     $("#ledger").querySelectorAll(".feed button").forEach(b => b.onclick = () => renderApproval(b.dataset.no));
   }
@@ -392,7 +395,7 @@ td.r, th.r { text-align: right; }
     const nM = D.approvals.filter(a => (a[8] || "").includes("MEDISのみ")).length;
     $("#coverage").innerHTML = `<span>承認番号 <b class="num">${(D.approvals.length - nM).toLocaleString()}</b>${nM ? `（MEDISのみ <b class="num">${nM.toLocaleString()}</b>）` : ""}</span>
       <span>掲載期間 <b class="mono">${esc(D.span[0] || "")}</b> 〜 <b class="mono">${esc(D.span[1] || "")}</b></span>
-      <span>通知 解析済 <b class="num">${(s["解析済"] || 0)}</b>・スキャン未対応 <b class="num">${(s["スキャン画像（未対応）"] || 0)}</b></span>
+      <span>通知 解析済 <b class="num">${(s["解析済"] || 0)}</b>・OCR <b class="num">${(s["OCR（要確認）"] || 0)}</b>${s["スキャン画像（未対応）"] ? `・未対応 <b class="num">${s["スキャン画像（未対応）"]}</b>` : ""}</span>
       <span>更新 <b class="mono">${esc((D.built_at || "").slice(0, 10))}</b></span>`;
   }
 

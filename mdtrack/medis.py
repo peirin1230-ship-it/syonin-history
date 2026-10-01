@@ -47,6 +47,8 @@ CREATE TABLE IF NOT EXISTS medis_items(
 CREATE INDEX IF NOT EXISTS ix_medis_appr ON medis_items(approval_no, snapshot);
 CREATE INDEX IF NOT EXISTS ix_medis_jan ON medis_items(jan, snapshot);
 CREATE INDEX IF NOT EXISTS ix_medis_code ON medis_items(receipt_code, snapshot);
+CREATE TABLE IF NOT EXISTS medis_dict(
+  snapshot TEXT, jan TEXT, approval_no TEXT, sales_name TEXT, maker TEXT, product_name TEXT);
 """
 
 
@@ -104,10 +106,22 @@ def import_file(path: Path, db: sqlite3.Connection, snapshot: str | None = None,
     first_names = [s[2] for s in slots if s[1] == 1]
     n_rows = n_items = 0
     batch = []
+    dict_batch = []
+    db.execute("DELETE FROM medis_dict WHERE snapshot=?", (snapshot,))
+    ji, ai, si, mi = idx["jan"], idx["approval_no"], idx.get("sales_name"), idx.get("maker")
+    pi_ = idx.get("product_name")
     for row in rd:
         n_rows += 1
         if len(row) < len(header):
             continue
+        # 承認番号・JAN の辞書（OCR の補正に使う。償還の有無を問わず全行）
+        if row[ai].strip():
+            dict_batch.append((snapshot, row[ji].strip(), row[ai].replace(" ", "").strip().upper(),
+                               row[si].strip() if si is not None else "", row[mi].strip() if mi is not None else "",
+                               row[pi_].strip() if pi_ is not None else ""))
+            if len(dict_batch) >= 50000:
+                db.executemany("INSERT INTO medis_dict VALUES (?,?,?,?,?,?)", dict_batch)
+                dict_batch.clear()
         if not any(row[i] for i in first_names):
             continue
         g = {k: row[i].strip() for k, i in idx.items()}
@@ -128,6 +142,10 @@ def import_file(path: Path, db: sqlite3.Connection, snapshot: str | None = None,
             log(f"  {n_rows:,}行処理…（償還情報 {n_items:,}件）")
     if batch:
         db.executemany("INSERT INTO medis_items VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", batch)
+    if dict_batch:
+        db.executemany("INSERT INTO medis_dict VALUES (?,?,?,?,?,?)", dict_batch)
+    db.execute("CREATE INDEX IF NOT EXISTS ix_medis_dict_appr ON medis_dict(approval_no)")
+    db.execute("CREATE INDEX IF NOT EXISTS ix_medis_dict_jan ON medis_dict(jan)")
     db.execute("INSERT OR REPLACE INTO medis_snapshots VALUES (?,?,?,?)", (snapshot, path.name, n_rows, n_items))
     db.commit()
     return n_rows, n_items

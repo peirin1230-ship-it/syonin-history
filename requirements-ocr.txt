@@ -1,0 +1,5 @@
+# スキャン画像の通知を OCR し直す場合のみ（python -m mdtrack ocr）。tesseract 5 本体と学習データも必要（README 参照）
+-r requirements.txt
+opencv-python-headless>=4.8
+pypdfium2>=4.0
+numpy>=1.24

@@ -97,7 +97,7 @@ def step_parse(p: Paths, workers: int = 2, force: bool = False, log=print) -> No
         if not force:
             try:
                 d = read_parsed(out)
-                if d and d.get("version") == parse_notice.PARSER_VERSION:
+                if d and (d.get("version") == parse_notice.PARSER_VERSION or d.get("ocr")):
                     continue
             except Exception:  # noqa: BLE001
                 pass
@@ -113,6 +113,104 @@ def step_parse(p: Paths, workers: int = 2, force: bool = False, log=print) -> No
                 log(f"  [{done}/{len(jobs)}] {doc_id}: エラー {err}")
             elif done % 20 == 0 or done == len(jobs):
                 log(f"  [{done}/{len(jobs)}] 完了")
+
+
+OCR_VERSION = 1
+_ENG = None
+
+
+def _ocr_init():
+    import os
+    os.environ["OMP_THREAD_LIMIT"] = "1"
+    global _ENG
+    from .ocr_notice import Engines
+    _ENG = Engines()
+
+
+def _ocr_one(args):
+    pdf_path, out_path, doc_id, eff = args
+    import time
+    from .ocr_notice import OcrNoticeParser
+    t0 = time.time()
+    try:
+        r = OcrNoticeParser(doc_id, eff, _ENG).parse(pdf_path)
+        d = {"version": parse_notice.PARSER_VERSION, "scanned": True, "ocr": True, "ocr_version": OCR_VERSION,
+             "records": [x.as_dict() for x in r.records], "warnings": r.warnings, "headings": r.headings,
+             "stats": r.stats, "seconds": round(time.time() - t0, 1)}
+    except Exception as e:  # noqa: BLE001
+        d = {"version": parse_notice.PARSER_VERSION, "scanned": True, "ocr": False, "error": repr(e)}
+    write_parsed(Path(out_path), d)
+    return doc_id, len(d.get("records", [])), d.get("seconds"), d.get("error")
+
+
+def step_ocr(p: Paths, workers: int = 2, force: bool = False, only: list[str] | None = None, log=print) -> None:
+    """スキャン画像の通知を OCR する（要 tesseract と jpn 学習データ）。時間がかかる（1頁 約5秒）。"""
+    manifest = fetch.load_manifest(p.manifest)
+    jobs = []
+    for m in manifest:
+        if only and m.doc_id not in only:
+            continue
+        out = parsed_path(p, m.doc_id)
+        d = read_parsed(out)
+        if not d or not d.get("scanned"):
+            continue
+        if d.get("ocr") and d.get("ocr_version") == OCR_VERSION and not force:
+            continue
+        pdf = p.pdf / f"{m.doc_id}.pdf"
+        if not pdf.exists():
+            continue
+        jobs.append((str(pdf), str(out), m.doc_id, m.effective_date))
+    log(f"OCR: {len(jobs)}本")
+    if not jobs:
+        return
+    done = 0
+    with ProcessPoolExecutor(max_workers=workers, initializer=_ocr_init) as ex:
+        for doc_id, n, sec, err in ex.map(_ocr_one, jobs, chunksize=1):
+            done += 1
+            log(f"  [{done}/{len(jobs)}] {doc_id}: {n}行 {sec}秒" + (f" エラー {err}" if err else ""))
+
+
+OCR_FIX_VERSION = 1
+
+
+def step_ocr_fix(p: Paths, log=print) -> None:
+    """OCR 結果の承認番号・製品コードを既知の番号と照合して補正し、解析キャッシュに書き戻す。
+
+    辞書: テキストPDF期の通知（data/syonin.sqlite）＋ MEDIS（data/medis/medis.sqlite があれば）
+    ＋ OCR 結果どうしで3回以上一致した承認番号。
+    """
+    import re
+    from collections import Counter
+    from . import ocr_repair
+    manifest = fetch.load_manifest(p.manifest)
+    docs = []
+    for m in manifest:
+        d = read_parsed(parsed_path(p, m.doc_id))
+        if d and d.get("ocr"):
+            docs.append((m, d))
+    if not docs:
+        log("OCR結果がありません")
+        return
+    log(f"OCR補正: {len(docs)}本 / 辞書を読み込み中…")
+    dic = ocr_repair.load_dictionary(p.db, p.medis / "medis.sqlite")
+    # OCR 結果どうしの多数決（構造が正しい承認番号が別々の通知で3回以上）
+    seen: dict[str, set] = {}
+    for m, d in docs:
+        for r in d["records"]:
+            a = r.get("approval_ocr") or r["approval_no"]
+            if re.fullmatch(r"\d{5}[A-Z]{3}\d{5}[0-9A-Z]\d{2}|\d{3}[A-Z]{5}\d{5}[0-9A-Z]\d{2}", a or ""):
+                seen.setdefault(a, set()).add(m.doc_id)
+    for a, ds in seen.items():
+        if len(ds) >= 3:
+            dic.add(a)
+    total = Counter()
+    for m, d in docs:
+        st = ocr_repair.repair_records(d["records"], dic)
+        total.update(st)
+        d["repaired"] = OCR_FIX_VERSION
+        d["repair_stats"] = st
+        write_parsed(parsed_path(p, m.doc_id), d)
+    log("  " + ", ".join(f"{k} {v:,}" for k, v in sorted(total.items())))
 
 
 def step_build(p: Paths, log=print) -> None:

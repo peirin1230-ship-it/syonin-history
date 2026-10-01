@@ -52,3 +52,23 @@ def test_norm_category():
     a = catmap.norm_category("010 血管造影用ﾏｲｸﾛｶﾃｰﾃﾙ (1)ｵｰﾊﾞｰｻﾞﾜｲﾔｰ ①選択的ｱﾌﾟﾛｰﾁ型 ｱ ﾌﾞﾚｰﾄﾞあり")
     b = catmap.norm_master("血管造影用マイクロカテーテル・オーバーザワイヤー・選択的アプローチ型・ブレードあり")
     assert a == b
+
+
+def test_ocr_repair():
+    from mdtrack import ocr_repair
+    d = ocr_repair.Dictionary()
+    d.add("22700BZI00025000", "4580000000000")
+    d.add("20600BZZ00666A01", "4547531706101")
+    assert ocr_repair.fix_approval("22700B2I00025000", [], d)[0] == "22700BZI00025000"
+    assert ocr_repair.fix_approval("22700BZI0002500", [], d) == ("22700BZI00025000", "fuzzy")
+    assert ocr_repair.fix_approval("2270082X0025000", ["4580000000000"], d)[0] == "22700BZI00025000"
+    assert ocr_repair.fix_approval("20600BZZ00666A01", [], d)[1] == "exact"
+    assert ocr_repair.fix_code("4547531706101", "20600BZZ00666A01", d) == ("4547531706101", "exact")
+    assert ocr_repair.fix_code("4547531706181", "20600BZZ00666A01", d) == ("4547531706101", "appr1")
+
+
+def test_ocr_fix_approval_positions():
+    from mdtrack.ocr_notice import fix_approval
+    assert fix_approval("2O6OOBZZOO666AO1") == "20600BZZ00666A01"
+    assert fix_approval("22OADBZXOO121OOO") == "220ADBZX00121000"
+    assert fix_approval("21800B2X10056000") == "21800BZX10056000"

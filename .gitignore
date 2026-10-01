@@ -14,3 +14,4 @@ data/medis/
 __pycache__/
 *.pyc
 .venv/
+tessdata/

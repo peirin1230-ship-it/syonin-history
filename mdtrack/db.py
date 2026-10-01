@@ -11,6 +11,7 @@ from datetime import date
 from pathlib import Path
 
 from . import catmap, ssk
+from .parse_notice import gtin_ok
 from .fetch import NoticeLink
 
 TARGET_KUBUN = re.compile(r"^(B|C|R)")  # 追跡対象（特定保険医療材料）
@@ -25,11 +26,12 @@ CREATE TABLE notices(doc_id TEXT PRIMARY KEY, title TEXT, url TEXT, kind TEXT, n
 CREATE TABLE raw_rows(doc_id TEXT, page INTEGER, setting TEXT, action TEXT, kubun TEXT, effective_date TEXT,
   approval_no TEXT, sales_name TEXT, product_name TEXT, product_code TEXT, annex TEXT, applicant TEXT,
   category TEXT, category_no TEXT, price_text TEXT, price REAL, price_unit TEXT, heading TEXT, side TEXT,
-  ref_notice_date TEXT);
+  ref_notice_date TEXT, ocr INTEGER DEFAULT 0);
 CREATE TABLE listing(id INTEGER PRIMARY KEY, doc_id TEXT, effective_date TEXT, setting TEXT, action TEXT,
   kubun TEXT, approval_no TEXT, sales_name TEXT, product_name TEXT, product_code TEXT, applicant TEXT,
   category TEXT, category_norm TEXT, category_no TEXT, price REAL, price_unit TEXT, price_text TEXT,
-  corrected_by TEXT, category_code TEXT, category_beppyo TEXT, match_score REAL);
+  corrected_by TEXT, category_code TEXT, category_beppyo TEXT, match_score REAL, ocr INTEGER DEFAULT 0,
+  category_ocr TEXT);
 CREATE INDEX ix_listing_appr ON listing(approval_no);
 CREATE INDEX ix_listing_code ON listing(product_code);
 CREATE TABLE corrections(correction_doc TEXT, correction_date TEXT, target_doc TEXT, target_date TEXT,
@@ -49,8 +51,147 @@ CREATE TABLE approvals(approval_no TEXT PRIMARY KEY, sales_name TEXT, applicant 
 """
 
 
+def cat_key(r: dict) -> str:
+    """機能区分の同一性の判定キー。特定器材コードが分かればそれ、無ければ表記の正規化。"""
+    return r.get("category_code") or norm_cat_text(r.get("category"))
+
+
 def norm_cat_text(s: str) -> str:
     return re.sub(r"\s+", "", unicodedata.normalize("NFKC", s or ""))
+
+
+_APPR_OK = re.compile(r"^(?:\d{5}[A-Z]{3}\d{5}[0-9A-Z]{3}|\d{3}[A-Z]{5}\d{5}[0-9A-Z]\d{2}|\d{2}[0-9A-Z]{14})$")
+
+
+def _usable_ocr_approval(r: dict) -> bool:
+    """OCR の承認番号が使えるか（辞書で補正済み、または番号の形式として妥当）。"""
+    if r.get("approval_fix") in ("exact", "jan", "fuzzy", "page"):
+        return True
+    return bool(_APPR_OK.match(r.get("approval_no") or ""))
+
+
+def _sane_effective(eff: str | None, notice_date: str | None, default: str | None) -> str | None:
+    """OCR で読んだ適用日が通知日から大きく外れていたら既定値（通知日の翌月1日）にする。"""
+    if not eff or not notice_date:
+        return default
+    try:
+        from datetime import date as _d
+        a, b = _d.fromisoformat(eff), _d.fromisoformat(notice_date)
+    except ValueError:
+        return default
+    return eff if -40 <= (a - b).days <= 70 else default
+
+
+class OcrCategoryMatcher:
+    """OCR 行の機能区分を、区分番号と価格から特定器材マスターのコードに当てる。
+
+    1. 区分番号が同じで、適用日時点の価格が一致するコード（複数なら名称の近いもの）
+    2. 価格だけが一致するコード（区分番号の誤読対策。名称の類似度が一定以上のもの）
+    3. 区分番号＋名称の類似度
+    当てられたら、表示名はマスターの名称（OCR の崩れた文字は category_ocr に残す）、価格はマスター値。
+    """
+
+    def __init__(self, matcher, sidx):
+        self.m = matcher
+        self.sidx = sidx
+        self._by_price: dict[str, dict[float, list[str]]] = {}
+        self.first_date = min((h[0][0] for h in sidx.hist.values() if h), default="2012-04-01")
+
+    def _price_index(self, eff: str):
+        if eff not in self._by_price:
+            idx: dict[float, list[str]] = defaultdict(list)
+            for code in self.sidx.hist:
+                p = self.sidx.price_at(code, eff)
+                if p:
+                    idx[round(p)].append(code)
+            self._by_price[eff] = idx
+        return self._by_price[eff]
+
+    def _at(self, code: str, eff: str):
+        """適用日時点のマスター値。マスターの記録（平成24年4月〜）より前なら最初の版で代用（名称の比較用）。"""
+        v = self.sidx.at(code, eff)
+        if v is None and self.sidx.hist.get(code):
+            v = self.sidx.hist[code][0][1]
+        return v
+
+    def _sim(self, text: str, code: str, eff: str) -> float:
+        from difflib import SequenceMatcher
+        v = self._at(code, eff)
+        if not v or not text:
+            return 0.0
+        a = catmap.norm_category(text)
+        b = catmap.norm_master(v[3] or v[2])
+        return SequenceMatcher(None, a, b).ratio() if a and b else 0.0
+
+    def apply(self, r: dict) -> None:
+        eff = r.get("effective_date") or "9999-12-31"
+        text, kno, price = r.get("category") or "", r.get("category_no"), r.get("price")
+        allowed = set(catmap.SETTING_BEPPYO.get(r.get("setting") or "医科", ("2",)))
+        best = None
+        if not kno:
+            m = re.match(r"^\D{0,2}(\d{3})", unicodedata.normalize("NFKC", text))
+            kno = m.group(1) if m else None
+        # 価格の候補: 読取値そのもの、先頭に単位（「1本」「1g」など）が数字として混ざった場合の末尾部分
+        prices = []
+        if price:
+            ps = str(int(price)) if float(price).is_integer() else str(price)
+            prices = [float(ps)] + [float(ps[k:]) for k in range(1, min(4, len(ps) - 1)) if ps[k:] and ps[k] != "0"]
+        for pi, pv in enumerate(prices):
+            allc = self._price_index(eff).get(round(pv), [])
+            cands = [c for c in allc if (self.sidx.at(c, eff) or (None,) * 7)[4] in allowed]
+            if not cands:  # 医科/歯科の判定（見出しのOCR）が誤っている場合
+                cands = [c for c in allc if (self.sidx.at(c, eff) or (None,) * 7)[5] == kno]
+            same_no = [c for c in cands if (self.sidx.at(c, eff) or (None,) * 7)[5] == kno]
+            if same_no:
+                best = (max(same_no, key=lambda c: self._sim(text, c, eff)), 0.9 if pi == 0 else 0.8)
+                break
+            if cands and pi == 0:
+                c = max(cands, key=lambda c: self._sim(text, c, eff))
+                if self._sim(text, c, eff) >= 0.35:
+                    best = (c, 0.7)
+                    break
+        pre_master = eff < self.first_date
+        if best is None and kno and price and not pre_master:
+            # 価格の1桁誤読: 同じ区分番号で、価格が1文字違いのコードが1つだけなら採用
+            ps = str(int(price)) if float(price).is_integer() else str(price)
+            near = []
+            for (bp, no), d in self.m.cands.items():
+                if no != kno or bp not in allowed:
+                    continue
+                for c in d:
+                    v = self.sidx.at(c, eff)
+                    if not v or v[0] is None:
+                        continue
+                    ms = str(int(v[0])) if float(v[0]).is_integer() else str(v[0])
+                    if len(ms) == len(ps) and sum(a != b for a, b in zip(ms, ps)) == 1:
+                        near.append(c)
+            if len(set(near)) == 1:
+                best = (near[0], 0.6)
+        if best is None and kno:
+            pool = [(c, self._sim(text, c, eff)) for (bp, no), d in self.m.cands.items() if no == kno and bp in allowed
+                    for c in d if self._at(c, eff)]
+            if pool:
+                c, sc = max(pool, key=lambda t: t[1])
+                if sc >= 0.45:
+                    best = (c, round(0.5 * sc, 2))
+        r["category_ocr"] = text
+        if r.get("kubun") == "R" and eff < "2018-04-01":  # 再製造（R）区分は平成30年度から。OCRの誤読
+            r["kubun"] = "B"
+        if best:
+            code, score = best
+            v = self._at(code, eff)
+            r["category_code"], r["category_beppyo"], r["match_score"] = code, v[4], score
+            r["setting"] = "歯科" if v[4] in ("4", "5", "6", "7") else "医科"
+            r["category"] = f"{v[5]} {v[3] or v[2]}"
+            r["category_no"] = v[5]
+            # マスター記録より前（平成24年3月以前）は価格を確かめられないので OCR の読取値を残す
+            if not pre_master or not price:
+                r["price"] = v[0]
+            elif v[0] and not (v[0] / 2.5 <= price <= v[0] * 2.5):
+                r["price"] = None  # 平成24年の価格と桁違い → OCR の誤読とみなす
+        else:
+            r["category_code"], r["category_beppyo"], r["match_score"] = None, None, 0.0
+            r["category"] = f"{kno or '???'} 機能区分未確定（OCR・{_fmt_price(price)}）"
 
 
 def default_effective(link: NoticeLink) -> str | None:
@@ -127,21 +268,34 @@ def build(db_path: Path, manifest: list[NoticeLink], parsed_dir: Path, ssk_dir: 
         d = read_parsed(parsed_dir / f"{m.doc_id}.json.gz")
         status, n, warns = "未解析", 0, []
         if d is not None:
-            if d.get("scanned"):
+            if d.get("scanned") and not d.get("ocr"):
                 status = "スキャン画像（未対応）"
             else:
+                is_ocr = bool(d.get("ocr"))
                 recs = d["records"]
                 eff = default_effective(m)
+                kept = []
                 for r in recs:
+                    r["ocr"] = 1 if is_ocr else 0
+                    if is_ocr:
+                        r["effective_date"] = _sane_effective(r.get("effective_date"), m.notice_date, eff)
+                        if not _usable_ocr_approval(r):
+                            continue
+                        # 既知のJANと照合できず、チェックデジットも合わない製品コードは誤読とみなして捨てる
+                        pc = r.get("product_code")
+                        if pc and r.get("code_fix") == "none" and not gtin_ok(pc):
+                            r["product_code"] = None
                     r["effective_date"] = r.get("effective_date") or eff
-                raw_by_doc[m.doc_id] = recs
-                status, n, warns = "解析済", len(recs), d.get("warnings", [])
+                    kept.append(r)
+                raw_by_doc[m.doc_id] = kept
+                status = "OCR（要確認）" if is_ocr else "解析済"
+                n, warns = len(kept), d.get("warnings", [])
         con.execute("INSERT INTO notices VALUES (?,?,?,?,?,?,?,?,?,?)",
                     (m.doc_id, m.title, m.url, m.kind, m.notice_date, default_effective(m), m.fiscal_section,
                      status, n, json.dumps(warns[:50], ensure_ascii=False)))
     cols = ["doc_id", "page", "setting", "action", "kubun", "effective_date", "approval_no", "sales_name",
             "product_name", "product_code", "annex", "applicant", "category", "category_no", "price_text", "price",
-            "price_unit", "heading", "side", "ref_notice_date"]
+            "price_unit", "heading", "side", "ref_notice_date", "ocr"]
     for did, recs in raw_by_doc.items():
         con.executemany(f"INSERT INTO raw_rows VALUES ({','.join('?' * len(cols))})",
                         [tuple(r.get(c) for c in cols) for r in recs])
@@ -245,7 +399,11 @@ def build(db_path: Path, manifest: list[NoticeLink], parsed_dir: Path, ssk_dir: 
     final.sort(key=lambda r: (r.get("effective_date") or "", r["doc_id"]))
     # 同じ表記でも時期によって対応するコードが変わる（改定でのコード再利用）ため、適用日ごとに判定する
     cmap: dict[tuple, tuple] = {}
+    ocr_matcher = OcrCategoryMatcher(matcher, sidx)
     for r in final:
+        if r.get("ocr"):
+            ocr_matcher.apply(r)
+            continue
         if not r.get("category"):
             r["category_code"], r["category_beppyo"], r["match_score"] = None, None, 0.0
             continue
@@ -261,22 +419,26 @@ def build(db_path: Path, manifest: list[NoticeLink], parsed_dir: Path, ssk_dir: 
             cmap[k] = matcher.match(k[0], k[1], price_ok=ok)
         r["category_code"], r["category_beppyo"], r["match_score"] = cmap[k]
     best: dict[tuple, tuple] = {}
-    for (st, cat, eff, price), v in cmap.items():
+    for (st, cat, eff, price), v in cmap.items():  # OCR 行は含めない
         if (st, cat) not in best or (v[2] or 0) > (best[(st, cat)][2] or 0):
             best[(st, cat)] = v
     con.executemany("INSERT INTO category_map VALUES (?,?,?,?,?)", [(k[0], k[1], *v) for k, v in best.items()])
     con.executemany(
         "INSERT INTO listing(doc_id,effective_date,setting,action,kubun,approval_no,sales_name,product_name,"
         "product_code,applicant,category,category_norm,category_no,price,price_unit,price_text,corrected_by,"
-        "category_code,category_beppyo,match_score) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "category_code,category_beppyo,match_score,ocr,category_ocr) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         [(r["doc_id"], r.get("effective_date"), r.get("setting"), r.get("action"), r.get("kubun"), r["approval_no"],
           r.get("sales_name"), r.get("product_name"), r.get("product_code"), r.get("applicant"), r.get("category"),
           norm_cat_text(r.get("category")), r.get("category_no"), r.get("price"), r.get("price_unit"),
           r.get("price_text"), r.get("corrected_by"), r.get("category_code"), r.get("category_beppyo"),
-          r.get("match_score")) for r in final])
+          r.get("match_score"), r.get("ocr", 0), r.get("category_ocr")) for r in final])
     matched = sum(1 for v in best.values() if v[0])
     n_ok = sum(1 for r in final if r.get("category_code"))
     log(f"  掲載行 {len(final):,}（マスター対応 {n_ok / max(1, len(final)):.1%}）/ 機能区分 {len(best):,}種（対応 {matched:,}）")
+    n_ocr = sum(1 for r in final if r.get("ocr"))
+    if n_ocr:
+        n_ocr_ok = sum(1 for r in final if r.get("ocr") and r.get("category_code"))
+        log(f"  うちOCR由来 {n_ocr:,}行（機能区分を特定 {n_ocr_ok / n_ocr:.1%}）")
 
     # ---- 5. イベント生成 ---------------------------------------------------
     make_events(con, final, sidx, links)
@@ -325,10 +487,11 @@ def make_events(con: sqlite3.Connection, final: list[dict], sidx: SskIndex, link
         first = True
         for (eff, did), g in sorted(groups.items()):
             kub = sorted({x.get("kubun") or "" for x in g})
+            src = "notice_ocr" if any(x.get("ocr") for x in g) else "notice"
             cats = {}
             for x in g:
                 if x.get("category"):
-                    cats.setdefault(norm_cat_text(x.get("category")), x)
+                    cats.setdefault(cat_key(x), x)
             by_code: dict[str, dict[str, dict]] = defaultdict(dict)
             for x in g:
                 if not x.get("category"):
@@ -336,9 +499,9 @@ def make_events(con: sqlite3.Connection, final: list[dict], sidx: SskIndex, link
                         prod_state.setdefault(x["product_code"], {})
                     continue
                 if x.get("product_code"):
-                    by_code[x["product_code"]][norm_cat_text(x.get("category"))] = x
+                    by_code[x["product_code"]][cat_key(x)] = x
                 else:
-                    nocode_state[norm_cat_text(x.get("category"))] = x
+                    nocode_state[cat_key(x)] = x
             new_codes = set(by_code) - set(prod_state)
             moves: dict[tuple[str, str], int] = defaultdict(int)
             for code, newcats in by_code.items():
@@ -359,19 +522,19 @@ def make_events(con: sqlite3.Connection, final: list[dict], sidx: SskIndex, link
                 detail = "; ".join(_cat_label(c) for c in cats.values())
                 evs.append((appr, eff, "listing_new", f"保険適用（区分{'/'.join(kub)}）",
                             f"{detail}／製品{len(new_codes)}件", g[0].get("setting"), "/".join(kub), None, None,
-                            None, None, did, "notice"))
+                            None, None, did, src))
             else:
                 for (on, nn), n in sorted(moves.items(), key=lambda t: -t[1]):
                     o, c = seen_cats.get(on) or {}, cats[nn]
                     evs.append((appr, eff, "category_changed", f"機能区分の変更（区分{c.get('kubun')}）",
                                 f"{o.get('category', on)} → {c.get('category')}（{n}製品）",
                                 c.get("setting"), c.get("kubun"), c.get("category"), c.get("category_code"),
-                                o.get("price"), c.get("price"), did, "notice"))
+                                o.get("price"), c.get("price"), did, src))
                 for cn, c in cats.items():
                     if cn not in seen_cats and cn not in moved_to:
                         evs.append((appr, eff, "category_added", f"機能区分の追加（区分{c.get('kubun')}）",
                                     _cat_label(c), c.get("setting"), c.get("kubun"), c.get("category"),
-                                    c.get("category_code"), None, c.get("price"), did, "notice"))
+                                    c.get("category_code"), None, c.get("price"), did, src))
                     elif cn in seen_cats:
                         prev = seen_cats[cn]
                         if (c.get("price") is not None and prev.get("price") is not None
@@ -383,12 +546,12 @@ def make_events(con: sqlite3.Connection, final: list[dict], sidx: SskIndex, link
                                 evs.append((appr, eff, "notice_price_diff", "通知上の償還価格が前回と異なる",
                                             f"{c['category']}: {_fmt_price(prev['price'])} → {_fmt_price(c['price'])}",
                                             c.get("setting"), c.get("kubun"), c.get("category"), code,
-                                            prev["price"], c["price"], did, "notice"))
+                                            prev["price"], c["price"], did, src))
                 if new_codes:
                     names = sorted({(x.get("product_name") or "")[:40] for x in g if x.get("product_code") in new_codes})
                     evs.append((appr, eff, "products_added", f"製品の追加（{len(new_codes)}件）",
                                 ", ".join(names)[:300], g[0].get("setting"), "/".join(kub), None, None, None, None,
-                                did, "notice"))
+                                did, src))
             for cn, c in cats.items():
                 seen_cats[cn] = c
             first = False
@@ -410,7 +573,7 @@ def make_events(con: sqlite3.Connection, final: list[dict], sidx: SskIndex, link
         first_seen = {}
         for r in rows:
             if r.get("category"):
-                first_seen.setdefault(norm_cat_text(r.get("category")), r.get("effective_date"))
+                first_seen.setdefault(cat_key(r), r.get("effective_date"))
 
         # 機能区分（マスター）側の価格改定・名称変更・廃止
         codes = {}
@@ -456,6 +619,8 @@ def make_events(con: sqlite3.Connection, final: list[dict], sidx: SskIndex, link
             })
         cur.sort(key=lambda x: (x.get("category") or ""))
         flags = []
+        if any(r.get("ocr") for r in rows):
+            flags.append("OCR由来の掲載あり")
         if any(x["code"] is None for x in cur):
             flags.append("マスター未対応の機能区分あり")
         if any(x["abolished"] for x in cur):
