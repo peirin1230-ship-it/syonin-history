@@ -146,7 +146,7 @@ def _xl(v):
     return _ILLEGAL.sub("", v) if isinstance(v, str) else v
 
 
-def write_excel(p: Paths, path: Path) -> None:
+def write_excel(p: Paths, path: Path, with_listing: bool = True) -> None:
     from openpyxl import Workbook
     from openpyxl.styles import Alignment, Font, PatternFill
     from openpyxl.utils import get_column_letter
@@ -186,16 +186,17 @@ def write_excel(p: Paths, path: Path) -> None:
                      "LEFT JOIN approvals a USING(approval_no) ORDER BY e.date DESC, e.approval_no").fetchall()
     sheet("変更イベント", ["承認番号", "販売名", "日付", "種別", "内容", "区分", "特定器材コード", "変更前(円)",
                       "変更後(円)", "出典", "通知ID"], ev, [19, 30, 11, 22, 70, 7, 12, 11, 11, 10, 14])
-    li = con.execute("SELECT l.effective_date, l.approval_no, l.sales_name, l.product_name, l.product_code, "
+    li = [] if not with_listing else con.execute("SELECT l.effective_date, l.approval_no, l.sales_name, l.product_name, l.product_code, "
                      "l.applicant, l.setting, l.kubun, CASE l.action WHEN 'new' THEN '新規' WHEN 'add' THEN "
                      "'追加・変更' ELSE l.action END, l.category, l.category_code, l.price_unit, l.price, n.title, "
                      "l.corrected_by, CASE l.ocr WHEN 1 THEN 'OCR' ELSE '' END, l.category_ocr "
                      "FROM listing l LEFT JOIN notices n USING(doc_id) "
                      "ORDER BY l.effective_date, l.approval_no").fetchall()
-    sheet("掲載明細", ["適用開始日", "承認番号", "販売名", "製品名", "製品コード", "保険適用希望者", "医科/歯科",
-                    "区分", "掲載種別", "決定機能区分", "特定器材コード", "単位", "償還価格(円)", "掲載通知",
-                    "訂正通知ID", "読取", "OCRの読取文字（機能区分）"], li,
-          [11, 19, 28, 34, 16, 24, 8, 6, 9, 50, 12, 10, 11, 50, 14, 6, 40])
+    if with_listing:
+        sheet("掲載明細", ["適用開始日", "承認番号", "販売名", "製品名", "製品コード", "保険適用希望者", "医科/歯科",
+                        "区分", "掲載種別", "決定機能区分", "特定器材コード", "単位", "償還価格(円)", "掲載通知",
+                        "訂正通知ID", "読取", "OCRの読取文字（機能区分）"], li,
+              [11, 19, 28, 34, 16, 24, 8, 6, 9, 50, 12, 10, 11, 50, 14, 6, 40])
     sh = con.execute("SELECT h.code, h.basic_name, h.name, h.beppyo, h.kubun_no, h.valid_from, h.price, h.unit, "
                      "h.abolish_date FROM ssk_history h WHERE h.code IN (SELECT DISTINCT category_code FROM listing) "
                      "ORDER BY h.code, h.valid_from").fetchall()
