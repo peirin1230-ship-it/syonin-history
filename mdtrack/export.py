@@ -130,10 +130,24 @@ def build_payload(p: Paths, include_medis: bool) -> dict:
                          "ORDER BY MIN(c.effective_date) DESC, n.notice_date DESC"):
         notices.append([r[0], r[1] or "", r[2] or "", r[3], r[4], r[5], r[6], counts.get(r[0], {}),
                         len(nchanges.get(r[0], []))])
+    # レセ電コード（特定器材コード）: 承認番号ごとの使用期間と、コードごとのマスター履歴
+    cu: dict[str, list] = {}
+    for r in con.execute("SELECT approval_no, code, setting, kubun, category, since, until, end_reason, next_codes, "
+                         "n_products, source, designated, since_doc, last_listed FROM code_usage "
+                         "ORDER BY approval_no, since, code"):
+        cu.setdefault(r[0], []).append([r[1], r[2] or "", r[3] or "", r[4] or "", r[5] or "", r[6] or "", r[7] or "",
+                                        r[8] or "", r[9] or 0, r[10] or "", r[11] or 0, r[12] or "", r[13] or ""])
+    codes: dict[str, list] = {}
+    for r in con.execute("SELECT code, valid_from, price, unit, name, basic_name, beppyo, kubun_no, abolish_date "
+                         "FROM ssk_history ORDER BY code, valid_from"):
+        codes.setdefault(r[0], []).append([r[1], r[2], r[3] or "", r[4] or "", r[5] or "", r[6] or "", r[7] or "",
+                                           r[8] or ""])
+    ssk_first = con.execute("SELECT MIN(valid_from) FROM ssk_history").fetchone()[0]
     payload = {
         "built_at": built[0] if built else "", "span": list(span), "notice_stats": stats,
         "approvals": aps, "events": evs, "products": prods, "docs": docs, "medis": medis,
         "notices": notices, "nchanges": nchanges, "corr_by_target": corr_by_target,
+        "cu": cu, "codes": codes, "ssk_first": ssk_first,
     }
     return payload
 
@@ -220,17 +234,34 @@ def write_excel(p: Paths, path: Path, with_listing: bool = True) -> None:
                         "区分", "掲載種別", "決定機能区分", "特定器材コード", "単位", "償還価格(円)", "掲載通知",
                         "訂正通知ID", "読取", "OCRの読取文字（機能区分）"], li,
               [11, 19, 28, 34, 16, 24, 8, 6, 9, 50, 12, 10, 11, 50, 14, 6, 40])
+    cu = con.execute("SELECT u.approval_no, a.sales_name, u.code, u.master_name, u.category, u.setting, u.kubun, "
+                     "u.since, u.until, u.end_reason, u.next_codes, u.n_products, "
+                     "CASE u.source WHEN 'master' THEN 'マスター（承認番号指定）' WHEN 'notice_ocr' THEN '通知（OCR）' "
+                     "ELSE '通知' END, CASE u.designated WHEN 1 THEN '承認番号指定' ELSE '' END, n.title "
+                     "FROM code_usage u LEFT JOIN approvals a USING(approval_no) "
+                     "LEFT JOIN notices n ON n.doc_id = u.since_doc "
+                     "ORDER BY u.approval_no, u.since, u.code").fetchall()
+    sheet("レセ電コードの履歴", ["承認番号", "販売名", "レセ電コード（特定器材コード）", "機能区分（マスター名称）",
+                          "通知の表記", "医科/歯科", "区分", "使用開始", "使用終了", "終了の理由", "移行先・後継候補コード",
+                          "製品数", "根拠", "コードの種類", "初掲載の通知"], cu,
+          [19, 30, 14, 60, 40, 8, 6, 11, 11, 12, 22, 7, 18, 12, 50])
     sh = con.execute("SELECT h.code, h.basic_name, h.name, h.beppyo, h.kubun_no, h.valid_from, h.price, h.unit, "
-                     "h.abolish_date FROM ssk_history h WHERE h.code IN (SELECT DISTINCT category_code FROM listing) "
+                     "h.abolish_date FROM ssk_history h WHERE h.code IN (SELECT DISTINCT code FROM code_usage) "
                      "ORDER BY h.code, h.valid_from").fetchall()
-    sheet("機能区分の価格履歴", ["特定器材コード", "基本名称", "名称", "別表", "区分番号", "変更年月日", "価格(円)",
-                         "単位", "廃止年月日"], sh, [12, 60, 34, 6, 8, 11, 11, 8, 11])
-    ncs = con.execute("SELECT c.effective_date, n.notice_date, c.approval_no, c.sales_name, c.applicant, c.kubun, "
-                      "c.change_types, c.summary, CASE c.ocr WHEN 1 THEN 'OCR' ELSE '' END, n.title "
-                      "FROM notice_changes c LEFT JOIN notices n USING(doc_id) "
-                      "ORDER BY c.effective_date DESC, c.approval_no").fetchall()
+    sheet("レセ電コードのマスター履歴", ["レセ電コード（特定器材コード）", "基本名称", "名称", "別表", "区分番号",
+                               "変更年月日", "価格(円)", "単位", "廃止年月日"], sh, [14, 60, 34, 6, 8, 11, 11, 8, 11])
+    ncs = []
+    for r in con.execute("SELECT c.effective_date, n.notice_date, c.approval_no, c.sales_name, c.applicant, c.kubun, "
+                         "c.change_types, c.summary, CASE c.ocr WHEN 1 THEN 'OCR' ELSE '' END, n.title, c.detail_json "
+                         "FROM notice_changes c LEFT JOIN notices n USING(doc_id) "
+                         "ORDER BY c.effective_date DESC, c.approval_no"):
+        d = json.loads(r[10] or "{}")
+        bc = sorted({x[1] for x in d.get("before", []) if isinstance(x, list) and x[1]})
+        ac = sorted({x[1] for x in d.get("after", []) if isinstance(x, list) and x[1]})
+        ncs.append(tuple(r[:8]) + (" ".join(bc), " ".join(ac)) + tuple(r[8:10]))
     sheet("通知ごとの変更点", ["適用開始日", "通知日", "承認番号", "販売名", "保険適用希望者", "区分", "変更の種類",
-                         "内容", "読取", "通知"], ncs, [11, 11, 19, 30, 24, 7, 22, 80, 6, 50])
+                         "内容", "この通知の前のレセ電コード", "この通知で掲載のレセ電コード", "読取", "通知"], ncs,
+          [11, 11, 19, 30, 24, 7, 22, 80, 22, 22, 6, 50])
     nt = con.execute("SELECT notice_date, effective_date, CASE kind WHEN 'notice' THEN '通知' WHEN 'correction' "
                      "THEN '訂正' WHEN 'replacement' THEN '差替' ELSE kind END, title, status, n_rows, url "
                      "FROM notices ORDER BY notice_date DESC").fetchall()
@@ -264,6 +295,13 @@ def print_history(p: Paths, approval_no: str) -> None:
         pn = f"¥{c['price_now']:,.0f}" if c.get("price_now") is not None else "—"
         ab = f"（{c['abolished']} 廃止）" if c.get("abolished") else ""
         print(f"  現在: {c['master_name'] or c['category']}  {pn} {ab}")
+    cu = con.execute("SELECT code, master_name, since, until, end_reason, next_codes FROM code_usage "
+                     "WHERE approval_no=? ORDER BY since, code", (a,)).fetchall()
+    if cu:
+        print("  レセ電コード:")
+        for c in cu:
+            end = f"〜{c[3]}（{c[4]}" + (f" → {c[5]}" if c[5] else "") + "）" if c[3] else "〜（使用中）"
+            print(f"   {c[0]}  {c[2] or '':10} {end}  {(c[1] or '')[:50]}")
     print("  履歴:")
     for e in con.execute("SELECT date, title, detail FROM events WHERE approval_no=? ORDER BY date", (a,)):
         print(f"   {e[0]}  {e[1]}  {e[2][:100] if e[2] else ''}")

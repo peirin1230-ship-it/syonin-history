@@ -78,3 +78,25 @@ def test_notice_change_helpers():
     from mdtrack.db import _nm, _norm_kubun
     assert _norm_kubun("B") == "B1" and _norm_kubun("C1") == "C1" and _norm_kubun("C") == "C?"
     assert _nm("ＫＺＲ－ＣＡＤ ファイバーブロック") == _nm("ＫＺＲ―ＣＡＤ　ファイバーブロック")
+
+
+def test_designated_codes_and_successors():
+    from mdtrack.db import SskIndex, strip_designation
+    from mdtrack.ssk import MasterRow
+
+    def row(code, name, price, cd, ab="99999999"):
+        return MasterRow("f", cd, "5", code, "", "", "1", price, cd, ab, "2", "117", name)
+
+    base = "植込型除細動器・植込型除細動器（３型）・ＭＲＩ対応型"
+    sidx = SskIndex([
+        row("710010739", base + "・指定承認番号２２５００ＢＺＸ００２９４０００", 3230000, "20131001"),
+        row("710010739", base + "・指定承認番号２２５００ＢＺＸ００２９４０００", 3320000, "20140401", "20150930"),
+        row("710010737", base, 3100000, "20140401"),
+        row("710010736", "植込型除細動器・植込型除細動器（３型）・標準型", 2900000, "20140401"),
+    ])
+    assert strip_designation(base + "・指定承認番号２２５００ＢＺＸ００２９４０００") == base
+    owner, by_appr = sidx.designated()
+    assert owner == {"710010739": "22500BZX00294000"}
+    assert by_appr["22500BZX00294000"][0][:3] == ("710010739", "2013-10-01", "2015-09-30")
+    assert sidx.successors("710010739") == ["710010737"]
+    assert sidx.successors("710010737") == []

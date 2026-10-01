@@ -216,16 +216,45 @@ td.r, th.r { text-align: right; }
 .ba li.gone { color: var(--ink-3); text-decoration: line-through; }
 .nsearch { width: 100%; max-width: 360px; padding: 7px 10px; border: 1px solid var(--rule); border-radius: var(--r); background: var(--sheet); }
 .goto { border: 0; background: none; color: var(--ai); cursor: pointer; padding: 0; font-size: 12px; text-decoration: underline; }
+/* レセ電コード */
+.clink { border: 0; background: none; color: var(--ai); cursor: pointer; padding: 0; font-family: var(--f-mono); font-size: inherit; text-decoration: underline; text-underline-offset: 2px; }
+.ctag { font-family: var(--f-mono); font-size: 11.5px; color: var(--ink-3); white-space: nowrap; }
+.cname { font-size: 12px; color: var(--ink-3); overflow-wrap: anywhere; }
+.gantt { margin: 4px 0 14px; font-size: 11.5px; }
+.g-row { display: grid; grid-template-columns: 84px minmax(0, 1fr); gap: 8px; align-items: center; min-height: 22px; }
+.g-lab { font-family: var(--f-mono); color: var(--ink-2); white-space: nowrap; }
+.g-track { position: relative; height: 12px; background: var(--rule-2); border-radius: 3px; }
+.g-bar { position: absolute; top: 0; bottom: 0; min-width: 3px; border-radius: 3px; background: var(--ai); }
+.g-bar.ended { background: var(--ink-3); }
+.g-bar.abol { background: var(--ev-abol); }
+.g-bar.inf { background: transparent; box-shadow: inset 0 0 0 1.5px var(--ai); }
+.g-bar.inf.ended { box-shadow: inset 0 0 0 1.5px var(--ink-3); }
+.g-bar.inf.abol { box-shadow: inset 0 0 0 1.5px var(--ev-abol); }
+.g-bar.ocr { background-image: repeating-linear-gradient(135deg, transparent 0 4px, rgba(255,255,255,.35) 4px 7px); }
+.g-axis { position: relative; height: 16px; color: var(--ink-3); font-family: var(--f-mono); }
+.g-axis span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
+.g-axis span::before { content: ""; position: absolute; left: 50%; top: -4px; height: 3px; border-left: 1px solid var(--rule); }
+.g-key { display: flex; flex-wrap: wrap; gap: 4px 14px; color: var(--ink-3); font-size: 12px; margin-bottom: 6px; }
+.g-key i { display: inline-block; width: 16px; height: 8px; border-radius: 2px; margin-right: 5px; vertical-align: 0; }
+.mh td.chg { color: var(--ink-2); font-size: 12.5px; }
+.mh td.mono { white-space: nowrap; }
+.mh tr.in td:first-child { box-shadow: inset 3px 0 0 var(--ai); }
+.up { color: var(--bad-fg); } .down { color: var(--ev-cat); }
+details.ph { margin-top: 3px; font-size: 12.5px; }
+details.ph summary { cursor: pointer; color: var(--ai); }
+details.ph ol { margin: 4px 0 0; padding-left: 1.2em; color: var(--ink-2); }
+details.ph li.out { color: var(--ink-3); }
 @media (prefers-reduced-motion: no-preference) { .item, .chip, .nitem, .tile { transition: background-color .12s; } }
 </style>
 
 <header class="top">
   <h1>承認番号 償還履歴</h1>
-  <span class="sub">特定保険医療材料（B・C区分）の保険適用・機能区分・償還価格の変遷</span>
+  <span class="sub">特定保険医療材料（B・C区分）の保険適用・機能区分・レセ電コード・償還価格の変遷</span>
   <div class="coverage" id="coverage"></div>
   <nav class="tabs" role="tablist" aria-label="表示の切り替え">
     <button type="button" role="tab" id="tabN" aria-selected="true">通知ごとの変更点</button>
     <button type="button" role="tab" id="tabA" aria-selected="false">承認番号で探す</button>
+    <button type="button" role="tab" id="tabC" aria-selected="false">レセ電コードで探す</button>
   </nav>
 </header>
 
@@ -253,6 +282,19 @@ td.r, th.r { text-align: right; }
   <section class="ledger" id="ledger" aria-live="polite">
     <div id="loading">データを展開しています…</div>
   </section>
+</main>
+
+<main id="viewC" hidden>
+  <section class="finder" aria-label="レセ電コードの検索">
+    <div class="search">
+      <label for="cq" class="eyebrow">レセ電コード（特定器材コード）・名称・承認番号で検索</label>
+      <input id="cq" type="search" placeholder="例: 710010738 / 植込型除細動器 / 22500BZX00292000" autocomplete="off">
+      <div class="chips" id="codeChips" role="group" aria-label="状態で絞り込み"></div>
+    </div>
+    <div class="count"><span id="ccount"></span><span>コード順</span></div>
+    <div class="list" id="clist" role="list"></div>
+  </section>
+  <section class="ledger" id="cdetail" aria-live="polite"></section>
 </main>
 
 <script id="payload" type="application/octet-stream">__DATA_B64__</script>
@@ -283,12 +325,31 @@ td.r, th.r { text-align: right; }
     return JSON.parse(text);
   }
 
+  // cu（承認番号ごとのレセ電コード）: [code, setting, kubun, category, since, until, reason, next, nProducts, source, designated, sinceDoc, lastListed]
+  // codes（マスター履歴）: code -> [[validFrom, price, unit, name, basicName, beppyo, kubunNo, abolish], ...]
+  const byCode = new Map();
+  const codeLast = c => { const h = D.codes[c]; return h ? h[h.length - 1] : null; };
+  const mname = v => String(v[4] || v[3] || "").normalize("NFKC");
+  const codeName = c => { const v = codeLast(c); return v ? mname(v) : ""; };
+  const codeAbol = c => { const v = codeLast(c); return v ? v[7] : ""; };
+  const codeFirst = c => { const h = D.codes[c]; return h ? h[0][0] : ""; };
+  // 廃止後の版は価格が 0 になるので、最後に設定されていた価格を使う
+  const lastPrice = c => { const h = D.codes[c] || []; for (let i = h.length - 1; i >= 0; i--) if (h[i][1]) return h[i][1]; return null; };
+  const today = new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10);
+  const clink = c => `<button class="clink" type="button" data-code="${esc(c)}">${esc(c)}</button>`;
+
   function index() {
     // approvals: [no, sales, applicant, first, last, kubuns, nProducts, current[], flags]
+    byCode.clear();
+    for (const [no, list] of Object.entries(D.cu || {})) for (const u of list) {
+      if (!byCode.has(u[0])) byCode.set(u[0], []);
+      byCode.get(u[0]).push([no, u]);
+    }
     rows = D.approvals.map(a => {
       const prods = D.products[a[0]] || [];
       const evs = D.events[a[0]] || [];
-      const cats = a[7].map(c => (c.category || "") + " " + (c.master_name || "") + " " + (c.code || "")).join(" ");
+      const cats = a[7].map(c => (c.category || "") + " " + (c.master_name || "") + " " + (c.code || "")).join(" ")
+        + " " + ((D.cu || {})[a[0]] || []).map(u => u[0]).join(" ");
       const hay = norm([a[0], a[1], a[2], cats].join(" "));
       const jans = prods.map(p => p[0]).join(" ");
       const hasRev = evs.some(e => e[1] === "price_revision");
@@ -364,10 +425,11 @@ td.r, th.r { text-align: right; }
       ? `<div class="price">${yen(e[6])} → <b>${yen(e[7])}</b>${e[6] ? ` <span class="sub2" style="display:inline">（${(e[7] - e[6] >= 0 ? "+" : "") + ((e[7] - e[6]) / e[6] * 100).toFixed(1)}%）</span>` : ""}</div>` : "";
     const inN = e[8] && D.nchanges && D.nchanges[e[8]] ? ` <button class="goto" type="button" data-doc="${esc(e[8])}">この通知の変更点一覧</button>` : "";
     const src = doc ? `<div class="src">出典: <a href="${esc(doc[1])}" target="_blank" rel="noopener">${esc(doc[0].replace(/［.*?］|（PDF：.*?）/g, ""))}</a>${inN}</div>`
-      : e[1] === "price_revision" || e[1] === "category_abolished" || e[1] === "category_renamed" ? `<div class="src">出典: 特定器材マスター（コード <span class="mono">${esc(e[5])}</span>）</div>` : "";
+      : e[1] === "price_revision" || e[1] === "category_abolished" || e[1] === "category_renamed" ? `<div class="src">出典: 特定器材マスター（レセ電コード ${clink(e[5])}）</div>` : "";
+    const ctag = e[5] && (e[1] === "category_changed" || e[1] === "category_added") ? ` <span class="ctag">レセ電コード ${clink(e[5])}</span>` : "";
     const ocr = e[9] === "notice_ocr" ? ` <span class="pill warn" title="スキャン画像の通知をOCRで読み取った掲載です。出典PDFで確認してください">OCR</span>` : "";
     return `<li class="ev-${esc(e[1])}"><div class="d">${esc(e[0])}</div><div class="rail"><span class="dot"></span></div>
-      <div class="body"><div class="t">${esc(e[2])}${ocr}</div>${e[3] ? `<div class="x">${esc(e[3])}</div>` : ""}${price}${src}</div></li>`;
+      <div class="body"><div class="t">${esc(e[2])}${ocr}</div>${e[3] ? `<div class="x">${esc(e[3])}${ctag}</div>` : ""}${price}${src}</div></li>`;
   }
 
   function renderApproval(no) {
@@ -376,12 +438,14 @@ td.r, th.r { text-align: right; }
     const r = rows.find(x => x.a[0] === no); if (!r) return;
     const a = r.a, evs = D.events[no] || [], prods = D.products[no] || [];
     const curRows = a[7].map(c => {
-      const st = c.abolished ? `<span class="pill bad">${esc(c.abolished)} 廃止</span>` : c.code ? "" : `<span class="pill warn">マスター未対応</span>`;
-      const diff = c.price_now != null && c.price_listed != null && Math.abs(c.price_now - c.price_listed) >= 0.5
+      const cuRow = ((D.cu || {})[no] || []).find(u => u[0] === c.code);
+      const succ = c.abolished && cuRow && cuRow[7] ? `<span class="sub2">後継: ${cuRow[7].split(",").map(clink).join("、")}</span>` : "";
+      const st = c.abolished ? `<span class="pill bad">${esc(c.abolished)} 廃止</span>${succ}` : c.code ? "" : `<span class="pill warn">マスター未対応</span>`;
+      const diff = c.price_now && c.price_listed != null && Math.abs(c.price_now - c.price_listed) >= 0.5
         ? `<span class="sub2">掲載時 ${yen(c.price_listed)}</span>` : "";
       return `<tr><td><span class="pill k">${esc(c.kubun || "")}</span></td>
-        <td>${esc(c.master_name || c.category)}${c.master_name && c.master_name !== c.category ? `<span class="sub2">通知表記: ${esc(c.category)}</span>` : ""}</td>
-        <td class="mono">${esc(c.code || "—")}</td><td class="r mono">${c.unit ? esc(c.unit) + " " : ""}${yen(c.price_now ?? c.price_listed)}${diff}</td>
+        <td>${esc((c.master_name || c.category || "").normalize("NFKC"))}${c.master_name && c.master_name !== c.category ? `<span class="sub2">通知表記: ${esc(c.category)}</span>` : ""}</td>
+        <td>${c.code ? clink(c.code) : "—"}</td><td class="r mono">${c.unit ? esc(c.unit) + " " : ""}${yen(c.price_now || (c.code && lastPrice(c.code)) || c.price_listed)}${diff}</td>
         <td class="mono">${esc(c.since || "")}</td><td class="r num">${c.n_products ? c.n_products.toLocaleString() : "—"}</td><td>${st}</td></tr>`;
     }).join("");
     const m = D.medis && D.medis.by_approval && D.medis.by_approval[no];
@@ -398,9 +462,10 @@ td.r, th.r { text-align: right; }
       </article>
       <article class="sheet">
         <h3>現在の機能区分 <small>${r.medisOnly ? "MEDIS登録内容" : "価格は特定器材マスターの現行値"}</small></h3>
-        <div class="tbl-wrap"><table><thead><tr><th>区分</th><th>機能区分</th><th>特定器材コード</th><th class="r">償還価格</th><th>初掲載</th><th class="r">製品数</th><th>状態</th></tr></thead>
+        <div class="tbl-wrap"><table><thead><tr><th>区分</th><th>機能区分</th><th>レセ電コード</th><th class="r">償還価格</th><th>初掲載</th><th class="r">製品数</th><th>状態</th></tr></thead>
         <tbody>${curRows}</tbody></table></div>
       </article>
+      ${renderCodeHistory(no)}
       ${medisHtml}
       <article class="sheet">
         <h3>変更の時系列 <small>${evs.length} 件</small></h3>
@@ -418,6 +483,190 @@ td.r, th.r { text-align: right; }
     if (pt) pt.onclick = () => { document.querySelectorAll(".more-prod").forEach(tr => tr.hidden = false); pt.remove(); };
     try { history.replaceState(null, "", "#" + no); } catch (e) {}
     if (window.matchMedia("(max-width: 860px)").matches) $("#ledger").scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  const REASON = { "使用中": "", "廃止": "bad", "廃止予定": "warn", "機能区分の変更": "k", "以後の掲載なし": "" };
+
+  function priceSteps(code, from, to) {
+    // コードのマスター履歴（価格・名称の変化だけ）。使用期間外は薄く表示
+    const h = D.codes[code] || [];
+    const out = [];
+    let prev = null;
+    for (const v of h) {
+      const parts = [];
+      if (!prev) parts.push(`${yen(v[1])}${v[2] ? "／" + esc(v[2]) : ""}`);
+      else {
+        if (prev[1] !== v[1] && v[1]) parts.push(`${yen(prev[1])} → <b>${yen(v[1])}</b>`);
+        if (mname(prev) !== mname(v)) parts.push(`名称変更: ${esc(mname(v))}`);
+        if (prev[7] !== v[7] && v[7]) parts.push(`廃止日 ${esc(v[7])} を設定`);
+      }
+      if (parts.length) {
+        const inside = (!from || v[0] >= from || !prev) && (!to || v[0] <= to);
+        out.push(`<li class="${inside ? "" : "out"}"><span class="mono">${esc(v[0] === D.ssk_first ? v[0] + "時点" : v[0])}</span> ${parts.join("・")}</li>`);
+      }
+      prev = v;
+    }
+    return out;
+  }
+
+  function gantt(items, labW = 84) {
+    // items: [{label, from, to, cls}]
+    const ds = items.flatMap(x => [x.from, x.to || today]).filter(Boolean).sort();
+    if (!ds.length) return "";
+    const y0 = +ds[0].slice(0, 4), y1 = Math.max(+ds[ds.length - 1].slice(0, 4), +today.slice(0, 4)) + 1;
+    const t = d => (Date.parse(d) - Date.parse(`${y0}-01-01`)) / (Date.parse(`${y1}-01-01`) - Date.parse(`${y0}-01-01`)) * 100;
+    const step = y1 - y0 > 12 ? 3 : y1 - y0 > 6 ? 2 : 1;
+    let ticks = "";
+    for (let y = y0; y <= y1; y += step) ticks += `<span style="left:${t(`${y}-01-01`).toFixed(2)}%">${y}</span>`;
+    const rowsH = items.map(x => {
+      const l = Math.max(0, t(x.from)), r = Math.min(100, t(x.to || today));
+      return `<div class="g-row" style="grid-template-columns:${labW}px minmax(0,1fr)"><span class="g-lab">${esc(x.label)}</span><div class="g-track" title="${esc(x.title || "")}"><span class="g-bar ${x.cls}" style="left:${l.toFixed(2)}%;width:${Math.max(0.6, r - l).toFixed(2)}%"></span></div></div>`;
+    }).join("");
+    return `<div class="gantt">${rowsH}<div class="g-row" style="grid-template-columns:${labW}px minmax(0,1fr)"><span></span><div class="g-axis">${ticks}</div></div></div>`;
+  }
+
+  function renderCodeHistory(no) {
+    const cu = (D.cu || {})[no] || [];
+    if (!cu.length) return "";
+    const items = cu.map(u => ({
+      label: u[0], from: u[4], to: u[5] || null, title: `${u[4]} 〜 ${u[5] || "現在"}（${u[6]}）`,
+      cls: (u[6] === "使用中" || u[6] === "廃止予定" ? "" : u[6] === "廃止" ? "abol" : "ended") + (u[9] === "notice_ocr" ? " ocr" : "") + (u[9] === "inferred" ? " inf" : "")
+    }));
+    const rowsH = cu.map(u => {
+      const name = codeName(u[0]) || u[3];
+      const nexts = u[7] ? u[7].split(",").filter(Boolean) : [];
+      const nextLabel = u[6] === "機能区分の変更" ? "移行先" : u[6] === "以後の掲載なし" ? "後に掲載" : "後継候補";
+      const steps = priceSteps(u[0], u[4], u[5]);
+      const pills = (u[10] ? ` <span class="pill k" title="名称に指定承認番号を含む、この承認番号専用のコード（C1・C2の新機能区分で、次の改定まで使われる）">承認番号指定</span>` : "")
+        + (u[9] === "notice_ocr" ? ` <span class="pill warn" title="スキャン画像の通知をOCRで読み取った掲載から判定">OCR</span>` : "")
+        + (u[9] === "master" ? ` <span class="pill" title="通知の掲載とは対応付かず、特定器材マスターの名称の指定承認番号から判定">マスターのみ</span>` : "")
+        + (u[9] === "inferred" ? ` <span class="pill" title="前のコードの廃止の翌日から有効な、同じ名称のコード（1つだけ）。通知への掲載はないため推定です">推定・後継</span>` : "");
+      return `<tr><td>${clink(u[0])}${pills}</td>
+        <td>${esc(name)}${u[3] && u[3] !== name ? `<span class="sub2">通知表記: ${esc(u[3])}</span>` : ""}
+          ${steps.length ? `<details class="ph"><summary>価格・名称の推移（${steps.length}）</summary><ol>${steps.join("")}</ol></details>` : ""}</td>
+        <td><span class="pill k">${esc(u[2] || "—")}</span></td>
+        <td class="mono" style="white-space:nowrap">${esc(u[4])} 〜<br>${u[5] ? esc(u[5]) : "現在"}</td>
+        <td>${u[6] ? `<span class="pill ${REASON[u[6]] || ""}">${esc(u[6])}</span>` : ""}${nexts.length ? `<span class="sub2">${nextLabel}: ${nexts.map(clink).join("、")}</span>` : ""}</td>
+        <td class="r num">${u[8] ? u[8].toLocaleString() : "—"}</td></tr>`;
+    }).join("");
+    return `<article class="sheet">
+      <h3>レセ電コード（特定器材コード）の履歴 <small>${cu.length} コード・この承認番号で使われた期間</small></h3>
+      <div class="g-key"><span><i style="background:var(--ai)"></i>使用中</span><span><i style="background:var(--ink-3)"></i>別の機能区分へ移行・掲載終了</span><span><i style="background:var(--ev-abol)"></i>コード廃止</span>${cu.some(u => u[9] === "inferred") ? `<span><i style="box-shadow:inset 0 0 0 1.5px var(--ai)"></i>推定（同名の後継コード）</span>` : ""}</div>
+      ${gantt(items)}
+      <div class="tbl-wrap"><table><thead><tr><th>レセ電コード</th><th>機能区分（特定器材マスターの名称）</th><th>区分</th><th>使用期間</th><th>終了・移行</th><th class="r">製品数</th></tr></thead>
+      <tbody>${rowsH}</tbody></table></div>
+      <p class="note" style="margin-top:8px">開始日はこの承認番号がそのコードの機能区分で初めて掲載された適用日、終了日は製品が別の機能区分に移った適用日、またはコードの廃止日（経過措置の終わり）です。廃止の翌日に有効な同じ名称のコードが1つだけあるときは、それを後継とみなして「推定・後継」の行を足しています。各コードの「価格・名称の推移」では、この承認番号の使用期間外の改定を薄く表示しています。</p>
+    </article>`;
+  }
+
+  // ---------------- レセ電コードで探す ----------------
+  let codeRows = [], cshown = 200, curCode = null, codeSel = new Set();
+  const CFLAGS = [
+    ["used", "通知の承認番号で使用", r => r.n > 0],
+    ["cur", "現行のコード", r => !r.abol || r.abol > today],
+    ["abol", "廃止済", r => r.abol && r.abol <= today],
+    ["desig", "承認番号指定", r => r.desig],
+  ];
+
+  function indexCodes() {
+    codeRows = Object.keys(D.codes || {}).sort().map(c => {
+      const v = codeLast(c), users = byCode.get(c) || [];
+      const names = [...new Set((D.codes[c] || []).map(mname))].join(" ");
+      return { c, v, n: users.length, abol: v[7], desig: users.some(x => x[1][10]) || /指定承認番号/.test(names),
+               hay: norm(c + " " + names + " " + users.map(x => x[0]).join(" ")) };
+    });
+    $("#codeChips").innerHTML = CFLAGS.map(([id, label]) => `<button class="chip" type="button" data-f="${id}" aria-pressed="false">${label}</button>`).join("");
+    $("#codeChips").addEventListener("click", e => {
+      const b = e.target.closest("button"); if (!b) return;
+      const f = b.dataset.f; codeSel.has(f) ? codeSel.delete(f) : codeSel.add(f);
+      b.setAttribute("aria-pressed", codeSel.has(f)); cshown = 200; renderCodeList();
+    });
+  }
+
+  function renderCodeList() {
+    const q = norm($("#cq").value);
+    const f = codeRows.filter(r => {
+      for (const [id, , fn] of CFLAGS) if (codeSel.has(id) && !fn(r)) return false;
+      return !q || r.hay.includes(q);
+    });
+    $("#ccount").textContent = `${f.length.toLocaleString()} 件のコード`;
+    const list = $("#clist");
+    if (!f.length) { list.innerHTML = `<div class="empty">該当するレセ電コードがありません。<br>特定器材マスター（平成24年4月以降の全版）に載ったコードが対象です。</div>`; return; }
+    list.innerHTML = f.slice(0, cshown).map(r => {
+      const st = r.abol && r.abol <= today ? `${r.abol} 廃止` : r.abol ? `${r.abol} 廃止予定` : "現行";
+      return `<button class="item" type="button" role="listitem" data-code="${esc(r.c)}" aria-current="${curCode === r.c}">
+        <span class="no">${esc(r.c)}</span><span class="kb">${esc(st)}・承認番号 ${r.n}</span>
+        <span class="nm">${esc(mname(r.v))}</span><span class="ap">別表${esc(r.v[5])}・区分番号 ${esc(r.v[6])}・${yen(r.v[1] || lastPrice(r.c))}</span></button>`;
+    }).join("") + (f.length > cshown ? `<div class="more"><button type="button" id="cmoreBtn">さらに表示（残り ${(f.length - cshown).toLocaleString()} 件）</button></div>` : "");
+    const mb = $("#cmoreBtn"); if (mb) mb.onclick = () => { cshown += 300; renderCodeList(); };
+  }
+
+  function renderCode(code) {
+    curCode = code;
+    document.querySelectorAll("#clist .item").forEach(b => b.setAttribute("aria-current", b.dataset.code === code));
+    const h = D.codes[code];
+    const users = (byCode.get(code) || []).slice().sort((x, y) => x[1][4].localeCompare(y[1][4]) || x[0].localeCompare(y[0]));
+    if (!h && !users.length) { $("#cdetail").innerHTML = `<div class="sheet empty">コード ${esc(code)} は特定器材マスターにありません。</div>`; return; }
+    const v = h ? h[h.length - 1] : null;
+    const first = h ? h[0][0] : "";
+    const ab = v ? v[7] : "";
+    const name = v ? mname(v) : users[0][1][3];
+    const desigNo = (name.normalize("NFKC").match(/指定承認番号[・\s]*([0-9A-Z]{14,17})/) || [])[1];
+    // マスター履歴（価格・名称・廃止日の変化）
+    let prev = null;
+    const hist = (h || []).map(x => {
+      const chg = [];
+      if (!prev) chg.push(x[0] === D.ssk_first ? "（マスターの収録開始時点）" : "新設");
+      else {
+        if (prev[1] !== x[1] && x[1]) {
+          const pct = prev[1] ? ((x[1] - prev[1]) / prev[1] * 100) : null;
+          chg.push(`価格 ${yen(prev[1])} → ${yen(x[1])}${pct != null ? ` <span class="${pct > 0 ? "up" : "down"}">（${pct > 0 ? "+" : ""}${pct.toFixed(1)}%）</span>` : ""}`);
+        }
+        if (mname(prev) !== mname(x)) chg.push(`名称変更（旧: ${esc(mname(prev))}）`);
+        if (prev[6] !== x[6]) chg.push(`区分番号 ${esc(prev[6])} → ${esc(x[6])}`);
+        if (prev[7] !== x[7]) chg.push(x[7] ? `廃止日 ${esc(x[7])} を設定${!x[1] ? "（価格の設定終了）" : ""}` : "廃止日の取消");
+        if (!chg.length) chg.push("その他の項目の変更");
+      }
+      prev = x;
+      return `<tr><td class="mono">${esc(x[0])}</td><td class="r mono">${x[1] ? (x[2] ? esc(x[2]) + " " : "") + yen(x[1]) : "—"}</td><td class="chg">${chg.join("<br>")}</td><td>${esc(mname(x))}</td></tr>`;
+    }).reverse().join("");
+    const nameOf = Object.fromEntries(D.approvals.map(a => [a[0], a[1]]));
+    const userRows = users.map(([no, u]) => `<tr><td><button class="clink" type="button" data-no="${esc(no)}">${esc(no)}</button>${u[10] ? ` <span class="pill k">指定</span>` : ""}${u[9] === "notice_ocr" ? ` <span class="pill warn">OCR</span>` : ""}${u[9] === "inferred" ? ` <span class="pill" title="前のコードの廃止の翌日から有効な同じ名称のコード。通知への掲載はないため推定">推定</span>` : ""}${u[9] === "master" ? ` <span class="pill">マスターのみ</span>` : ""}</td>
+        <td>${esc(nameOf[no] || "")}</td><td><span class="pill k">${esc(u[2] || "—")}</span></td>
+        <td class="mono" style="white-space:nowrap">${esc(u[4])} 〜 ${u[5] ? esc(u[5]) : "現在"}</td>
+        <td>${u[6] ? `<span class="pill ${REASON[u[6]] || ""}">${esc(u[6])}</span>` : ""}${u[7] ? `<span class="sub2">→ ${u[7].split(",").map(clink).join("、")}</span>` : ""}</td>
+        <td class="r num">${u[8] || "—"}</td></tr>`).join("");
+    // このコードへ移ってきた元のコード
+    const from = new Map();
+    for (const [no, list] of Object.entries(D.cu || {})) for (const u of list) if (u[7] && u[7].split(",").includes(code)) from.set(u[0], (from.get(u[0]) || 0) + 1);
+    const succ = new Set(users.flatMap(([, u]) => u[7] ? u[7].split(",") : []));
+    const rel = (from.size ? `<p>移行元・前身のコード: ${[...from.keys()].sort().map(c => `${clink(c)} <span class="cname">${esc(codeName(c))}</span>`).join("、")}</p>` : "")
+      + (succ.size ? `<p>移行先・後継候補のコード: ${[...succ].sort().map(c => `${clink(c)} <span class="cname">${esc(codeName(c))}</span>`).join("、")}</p>` : "");
+    $("#cdetail").innerHTML = `
+      <article class="sheet">
+        <div class="eyebrow">レセ電コード（特定器材コード）</div>
+        <h2 class="appr">${esc(code)}</h2>
+        <div class="sales">${esc(name)}</div>
+        <div class="meta">${v ? `<span>別表 <b>${esc(v[5])}</b>・区分番号 <b class="mono">${esc(v[6])}</b></span>
+          <span>${first === D.ssk_first ? `収録開始 <b class="mono">${esc(first)}</b> 以前から` : `新設 <b class="mono">${esc(first)}</b>`}</span>
+          <span>${ab ? `${ab <= today ? "廃止" : "廃止予定"} <b class="mono">${esc(ab)}</b>` : "<b>現行</b>"}</span>
+          <span>${ab && ab <= today ? "最終" : "現在"}の償還価格 <b class="mono">${v[2] ? esc(v[2]) + " " : ""}${yen(v[1] || lastPrice(code))}</b></span>` : ""}</div>
+        ${desigNo ? `<p class="note" style="margin-top:8px"><span class="pill k">承認番号指定</span> 承認番号 <button class="clink" type="button" data-no="${esc(desigNo)}">${esc(desigNo)}</button> の製品専用のコードです（C1・C2の新機能区分。次の改定で告示の機能区分に入るまで使われます）。</p>` : ""}
+        ${rel ? `<div class="note" style="margin-top:8px">${rel}</div>` : ""}
+      </article>
+      <article class="sheet">
+        <h3>このコードを使った承認番号 <small>${users.length} 件・通知の掲載から判定${users.length > 40 ? "（図は使用開始の早い 40 件）" : ""}</small></h3>
+        ${users.length ? `${gantt(users.slice(0, 40).map(([no, u]) => ({ label: no, from: u[4], to: u[5] || null, title: `${no} ${u[4]} 〜 ${u[5] || "現在"}`, cls: (u[6] === "使用中" || u[6] === "廃止予定" ? "" : u[6] === "廃止" ? "abol" : "ended") + (u[9] === "inferred" ? " inf" : "") })), 124)}
+        <div class="tbl-wrap"><table><thead><tr><th>承認番号</th><th>販売名</th><th>区分</th><th>使用期間</th><th>終了・移行</th><th class="r">製品数</th></tr></thead><tbody>${userRows}</tbody></table></div>`
+        : `<p class="note">B・C区分の通知の掲載で、このコードに対応付いた承認番号はありません。</p>`}
+      </article>
+      <article class="sheet">
+        <h3>特定器材マスターでの履歴 <small>新しい順・${(h || []).length} 版</small></h3>
+        <div class="tbl-wrap"><table class="mh"><thead><tr><th>変更年月日</th><th class="r">償還価格</th><th>変更内容</th><th>名称（基本漢字名称）</th></tr></thead><tbody>${hist}</tbody></table></div>
+        <p class="note" style="margin-top:8px">支払基金（現・医療情報基盤・診療報酬審査支払機構）の特定器材マスター（平成24年4月以降の全版）から、価格・名称・区分番号・廃止日の変化を抜き出しています。</p>
+      </article>`;
+    try { history.replaceState(null, "", "#c-" + code); } catch (e) {}
+    if (window.matchMedia("(max-width: 860px)").matches) $("#cdetail").scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
   function renderMedis(m) {
@@ -449,6 +698,7 @@ td.r, th.r { text-align: right; }
         <h3>このデータについて</h3>
         <p>厚生労働省「医療機器の保険適用について」（毎月の保医発通知、一部訂正・差替を含む）のうち、B・C区分（特定保険医療材料）として掲載された行を承認番号ごとにまとめています。償還価格の改定・機能区分の廃止は、支払基金（現・医療情報基盤・診療報酬審査支払機構）の特定器材マスター全版と照合して表示しています。</p>
         <p>平成20〜28年度前半の通知はスキャン画像のため、OCR（文字認識）で読み取っています。承認番号と製品コードは既知の番号と照合して補正し、機能区分は区分番号と価格から当時の特定器材マスターの区分に当てています。これらの掲載には <span class="pill warn">OCR</span> の印を付けています。誤読が残っている可能性があるので、出典PDFで確認してください。この時期の古い様式の訂正通知（「項目／誤／正」を文章で書く形式）は反映していません。</p>
+        <p>レセ電コード（特定器材コード、9桁）は、掲載された機能区分を特定器材マスターに対応付けて求めています。承認番号ごとのページに、使ったコードとその期間（初掲載〜別の機能区分への移行・コード廃止）を、「レセ電コードで探す」にコードごとの価格・名称の履歴と使用した承認番号を表示しています。C1・C2の新機能区分で使われる「指定承認番号」付きのコードは、その承認番号に優先して当てています。</p>
         <p>A1（包括）・A2（特定包括）は含みません。機能区分とマスターの対応は名称の類似度と価格で自動判定しているため、「マスター未対応」の行は通知の表記をそのまま表示しています。</p>
       </article>`;
     $("#ledger").querySelectorAll(".feed button").forEach(b => b.onclick = () => renderApproval(b.dataset.no));
@@ -513,11 +763,15 @@ td.r, th.r { text-align: right; }
       + (corr.length ? `<button class="tile" type="button" data-t="訂正" aria-pressed="${typeSel.has("訂正")}" title="この通知に対する一部訂正で直された承認番号"><b>${corrAppr.size}</b><span>あとで訂正</span></button>` : "");
     const rowsHtml = rowsF.map(r => {
       const types = r[5].split(",");
-      const before = new Set(r[7]), after = new Set(r[8]);
+      const K = x => Array.isArray(x) ? (x[1] || x[0]) : x;
+      const L = x => Array.isArray(x) ? `${esc(x[0])}${x[1] ? ` <span class="ctag">${clink(x[1])}</span>` : ""}` : esc(x);
+      const before = new Set(r[7].map(K)), after = new Set(r[8].map(K));
       const moves = r[9] || [];
-      const detail = (types.includes("新規") ? "" : `<details><summary>変更前と変更後の機能区分</summary><div class="ba">
-          <div><h4>この通知の前</h4><ul>${r[7].map(x => `<li class="${after.has(x) ? "" : (moves.some(m => m.from === x) ? "gone" : "")}">${esc(x)}</li>`).join("") || "<li>—</li>"}</ul></div>
-          <div><h4>この通知での掲載</h4><ul>${r[8].map(x => `<li class="${before.has(x) ? "" : "new"}">${esc(x)}</li>`).join("") || "<li>—</li>"}</ul></div></div></details>`);
+      const gone = x => moves.some(m => (Array.isArray(x) && x[1] && m.code_from) ? m.code_from === x[1] : m.from === (Array.isArray(x) ? x[0] : x));
+      const detail = (types.includes("新規") ? (r[8].some(x => Array.isArray(x) && x[1]) ? `<div class="sub2" style="margin-top:3px">レセ電コード: ${[...new Set(r[8].map(x => x[1]).filter(Boolean))].map(clink).join("、")}</div>` : "")
+        : `<details><summary>変更前と変更後の機能区分・レセ電コード</summary><div class="ba">
+          <div><h4>この通知の前</h4><ul>${r[7].map(x => `<li class="${after.has(K(x)) ? "" : (gone(x) ? "gone" : "")}">${L(x)}</li>`).join("") || "<li>—</li>"}</ul></div>
+          <div><h4>この通知での掲載</h4><ul>${r[8].map(x => `<li class="${before.has(K(x)) ? "" : "new"}">${L(x)}</li>`).join("") || "<li>—</li>"}</ul></div></div></details>`);
       return `<div class="ncrow"><div class="who"><button type="button" data-no="${esc(r[0])}">${esc(r[0])}</button>
           <div class="sn">${esc(r[1])}</div><div class="ap">${esc(r[2])}・区分${esc(r[3])}・製品${r[10]}件</div></div>
         <div class="what"><div class="bs">${typeBadges(types)}${corrAppr.has(r[0]) ? `<span class="tb t-訂正">あとで訂正</span>` : ""}</div>
@@ -551,10 +805,10 @@ td.r, th.r { text-align: right; }
   }
 
   function showView(v) {
-    $("#viewN").hidden = v !== "N";
-    $("#viewA").hidden = v !== "A";
-    $("#tabN").setAttribute("aria-selected", v === "N");
-    $("#tabA").setAttribute("aria-selected", v === "A");
+    for (const k of ["N", "A", "C"]) {
+      $("#view" + k).hidden = v !== k;
+      $("#tab" + k).setAttribute("aria-selected", v === k);
+    }
   }
 
   function coverage() {
@@ -567,14 +821,28 @@ td.r, th.r { text-align: right; }
   }
 
   load().then(d => {
-    D = d; index(); coverage(); buildChips(); renderList(); renderNoticeList();
-    const h = decodeURIComponent(location.hash.slice(1));
+    D = d; D.codes = D.codes || {}; D.cu = D.cu || {};
+    index(); indexCodes(); coverage(); buildChips(); renderList(); renderNoticeList(); renderCodeList();
     renderHome();
-    if (h && D.events[h]) { showView("A"); renderApproval(h); }
-    else if (h.startsWith("n-") && D.nchanges[h.slice(2)]) { showView("N"); renderNotice(h.slice(2)); }
-    else { showView("N"); if (D.notices.length) renderNotice(D.notices[0][0]); }
+    const route = boot => {
+      const h = decodeURIComponent(location.hash.slice(1));
+      if (h && D.events[h]) { showView("A"); renderApproval(h); }
+      else if (h.startsWith("n-") && D.nchanges[h.slice(2)]) { showView("N"); renderNotice(h.slice(2)); }
+      else if (h.startsWith("c-") && (D.codes[h.slice(2)] || byCode.has(h.slice(2)))) { showView("C"); renderCode(h.slice(2)); }
+      else if (boot) { showView("N"); if (D.notices.length) renderNotice(D.notices[0][0]); }
+    };
+    route(true);
+    window.addEventListener("hashchange", () => route(false));
     $("#tabN").onclick = () => { showView("N"); if (!curDoc && D.notices.length) renderNotice(D.notices[0][0]); };
     $("#tabA").onclick = () => showView("A");
+    $("#tabC").onclick = () => { showView("C"); if (!curCode) $("#cdetail").innerHTML = `<article class="sheet note"><h3>レセ電コード（特定器材コード）</h3><p>左の一覧からコードを選ぶと、特定器材マスターでの価格・名称・廃止の履歴と、そのコードを使った承認番号（使用期間）を表示します。</p><p>承認番号ごとのコードの移り変わりは「承認番号で探す」の各承認番号のページにも表示しています。</p></article>`; };
+    let tc; $("#cq").addEventListener("input", () => { clearTimeout(tc); tc = setTimeout(() => { cshown = 200; renderCodeList(); }, 120); });
+    $("#clist").addEventListener("click", e => { const b = e.target.closest(".item"); if (b) renderCode(b.dataset.code); });
+    document.addEventListener("click", e => {
+      const b = e.target.closest(".clink"); if (!b) return;
+      if (b.dataset.code) { showView("C"); renderCode(b.dataset.code); }
+      else if (b.dataset.no) { if (D.events[b.dataset.no]) { showView("A"); renderApproval(b.dataset.no); } }
+    });
     $("#nlist").addEventListener("click", e => { const b = e.target.closest(".nitem"); if (b) { typeSel.clear(); renderNotice(b.dataset.doc); } });
     let t; $("#q").addEventListener("input", () => { clearTimeout(t); t = setTimeout(() => { shown = 200; renderList(); }, 120); });
     $("#list").addEventListener("click", e => { const b = e.target.closest(".item"); if (b) renderApproval(b.dataset.no); });

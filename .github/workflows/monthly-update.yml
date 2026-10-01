@@ -1,10 +1,9 @@
 name: monthly-update
 
 # 毎月の保医発通知（月末発出・翌月1日適用）を取り込み、docs/ のビューアと解析キャッシュを更新する。
+# 定期実行は Claude のスケジュールタスク（毎月1日 9:00 JST）で行うため、ここは手動実行用（予備）。
 # 厚生局サイトから取得できない場合は、手元PCで `python -m mdtrack update` を実行して push してください。
 on:
-  schedule:
-    - cron: "17 0 2 * *"   # 毎月2日 09:17 JST
   workflow_dispatch:
 
 permissions:

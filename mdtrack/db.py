@@ -7,7 +7,8 @@ import re
 import sqlite3
 import unicodedata
 from collections import defaultdict
-from datetime import date
+from datetime import date, timedelta
+from difflib import SequenceMatcher
 from pathlib import Path
 
 from . import catmap, ssk
@@ -20,7 +21,7 @@ SCHEMA = """
 DROP TABLE IF EXISTS notices; DROP TABLE IF EXISTS raw_rows; DROP TABLE IF EXISTS listing;
 DROP TABLE IF EXISTS ssk_history; DROP TABLE IF EXISTS category_map; DROP TABLE IF EXISTS events;
 DROP TABLE IF EXISTS approvals; DROP TABLE IF EXISTS corrections; DROP TABLE IF EXISTS meta;
-DROP TABLE IF EXISTS notice_changes;
+DROP TABLE IF EXISTS notice_changes; DROP TABLE IF EXISTS code_usage;
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE notices(doc_id TEXT PRIMARY KEY, title TEXT, url TEXT, kind TEXT, notice_date TEXT,
   effective_date TEXT, fiscal_section TEXT, status TEXT, n_rows INTEGER, warnings TEXT);
@@ -49,6 +50,11 @@ CREATE INDEX ix_events_appr ON events(approval_no, date);
 CREATE TABLE notice_changes(doc_id TEXT, effective_date TEXT, approval_no TEXT, sales_name TEXT, applicant TEXT,
   kubun TEXT, actions TEXT, change_types TEXT, summary TEXT, detail_json TEXT, ocr INTEGER);
 CREATE INDEX ix_nc_doc ON notice_changes(doc_id);
+CREATE TABLE code_usage(approval_no TEXT, code TEXT, setting TEXT, kubun TEXT, category TEXT, master_name TEXT,
+  since TEXT, since_doc TEXT, last_listed TEXT, last_doc TEXT, until TEXT, end_reason TEXT, next_codes TEXT,
+  n_products INTEGER, source TEXT, designated INTEGER, ocr INTEGER);
+CREATE INDEX ix_cu_appr ON code_usage(approval_no);
+CREATE INDEX ix_cu_code ON code_usage(code);
 CREATE TABLE approvals(approval_no TEXT PRIMARY KEY, sales_name TEXT, applicant TEXT, first_date TEXT,
   last_date TEXT, kubuns TEXT, n_products INTEGER, n_categories INTEGER, n_events INTEGER,
   current_json TEXT, flags TEXT);
@@ -105,9 +111,9 @@ class OcrCategoryMatcher:
         if eff not in self._by_price:
             idx: dict[float, list[str]] = defaultdict(list)
             for code in self.sidx.hist:
-                p = self.sidx.price_at(code, eff)
-                if p:
-                    idx[round(p)].append(code)
+                v = self.sidx.at(code, eff)
+                if v and v[0] and not (v[6] and v[6] < eff):
+                    idx[round(v[0])].append(code)
             self._by_price[eff] = idx
         return self._by_price[eff]
 
@@ -117,6 +123,11 @@ class OcrCategoryMatcher:
         if v is None and self.sidx.hist.get(code):
             v = self.sidx.hist[code][0][1]
         return v
+
+    def _alive(self, code: str, eff: str) -> bool:
+        """適用日にそのコードが廃止済でない（マスターの記録より前は判定できないので可）。"""
+        v = self.sidx.at(code, eff)
+        return v is None or not (v[6] and v[6] < eff)
 
     def _sim(self, text: str, code: str, eff: str) -> float:
         from difflib import SequenceMatcher
@@ -164,7 +175,7 @@ class OcrCategoryMatcher:
                     continue
                 for c in d:
                     v = self.sidx.at(c, eff)
-                    if not v or v[0] is None:
+                    if not v or not v[0] or (v[6] and v[6] < eff):  # 価格なし・廃止済のコードは除く
                         continue
                     ms = str(int(v[0])) if float(v[0]).is_integer() else str(v[0])
                     if len(ms) == len(ps) and sum(a != b for a, b in zip(ms, ps)) == 1:
@@ -173,7 +184,7 @@ class OcrCategoryMatcher:
                 best = (near[0], 0.6)
         if best is None and kno:
             pool = [(c, self._sim(text, c, eff)) for (bp, no), d in self.m.cands.items() if no == kno and bp in allowed
-                    for c in d if self._at(c, eff)]
+                    for c in d if self._at(c, eff) and self._alive(c, eff)]
             if pool:
                 c, sc = max(pool, key=lambda t: t[1])
                 if sc >= 0.45:
@@ -258,6 +269,58 @@ class SskIndex:
     def price_at(self, code: str, d: str):
         v = self.at(code, d)
         return v[0] if v else None
+
+    # ---- 承認番号を指定したコード・後継コード ------------------------------
+    def designated(self) -> tuple[dict[str, str], dict[str, list[tuple]]]:
+        """名称に「指定承認番号○○」を含む（その承認番号専用の）コード。
+
+        戻り値: (コード → 承認番号, 承認番号 → [(コード, 適用開始, 廃止日, 別表, 区分番号, 名称)])
+        C1・C2 の新機能区分は、次の改定で告示の区分に入るまで承認番号を指定したコードで請求する。
+        """
+        if hasattr(self, "_desig"):
+            return self._desig
+        owner, by_appr = {}, defaultdict(list)
+        for code, h in self.hist.items():
+            v = h[-1][1]
+            t = unicodedata.normalize("NFKC", f"{v[3]} {v[2]}")
+            m = _DESIG.search(t)
+            if not m:
+                continue
+            a = m.group(1)
+            owner[code] = a
+            by_appr[a].append((code, h[0][0], v[6], v[4], v[5], strip_designation(v[3] or v[2])))
+        self._desig = (owner, dict(by_appr))
+        return self._desig
+
+    def successors(self, code: str) -> list[str]:
+        """廃止されたコードの後継候補: 廃止の翌日に有効で、同じ別表・同じ名称（指定承認番号の部分を除く）のコード。"""
+        h = self.hist.get(code)
+        if not h or not h[-1][1][6]:
+            return []
+        if not hasattr(self, "_by_name"):
+            self._by_name = defaultdict(set)
+            for c, hh in self.hist.items():
+                for _, v in hh:
+                    self._by_name[(v[4], catmap.norm_master(strip_designation(v[3] or v[2])))].add(c)
+        v = h[-1][1]
+        nxt = (date.fromisoformat(v[6]) + timedelta(days=1)).isoformat()
+        out = []
+        for c in sorted(self._by_name.get((v[4], catmap.norm_master(strip_designation(v[3] or v[2]))), ())):
+            if c == code:
+                continue
+            v2 = self.at(c, nxt)
+            if v2 and not (v2[6] and v2[6] < nxt):
+                out.append(c)
+        return out
+
+
+_DESIG = re.compile(r"指定承認番号[・･\s]*([0-9A-Z]{14,17})")
+
+
+def strip_designation(name: str) -> str:
+    """「…・指定承認番号２２５００ＢＺＸ００３２００００」の部分を除いた名称。"""
+    t = re.sub(r"[・･]?指定承認番号[・･\s]*[0-9A-Z０-９Ａ-Ｚ]{14,17}", "", name or "")
+    return re.sub(r"[・･]?指定(?:番号\S*)?$", "", t.strip())
 
 
 def build(db_path: Path, manifest: list[NoticeLink], parsed_dir: Path, ssk_dir: Path, log=print) -> None:
@@ -422,6 +485,8 @@ def build(db_path: Path, manifest: list[NoticeLink], parsed_dir: Path, ssk_dir: 
 
             cmap[k] = matcher.match(k[0], k[1], price_ok=ok)
         r["category_code"], r["category_beppyo"], r["match_score"] = cmap[k]
+    n_set, n_fix = apply_designated(final, sidx, matcher)
+    log(f"  承認番号指定のコード: {n_set:,}行に適用 / 他の承認番号の指定コードを外したもの {n_fix:,}行")
     best: dict[tuple, tuple] = {}
     for (st, cat, eff, price), v in cmap.items():  # OCR 行は含めない
         if (st, cat) not in best or (v[2] or 0) > (best[(st, cat)][2] or 0):
@@ -449,6 +514,54 @@ def build(db_path: Path, manifest: list[NoticeLink], parsed_dir: Path, ssk_dir: 
     con.execute("INSERT INTO meta VALUES ('built_at', datetime('now','localtime'))")
     con.commit()
     con.close()
+
+
+def apply_designated(final: list[dict], sidx: SskIndex, matcher: catmap.CategoryMatcher) -> tuple[int, int]:
+    """承認番号を指定したコード（C1・C2 の新機能区分の暫定コード）を、その承認番号の掲載行に当てる。
+
+    名称の類似度だけで対応付けると、他社の承認番号の指定コードに当たったり、一般のコードに
+    当たったりするため、適用日に有効な自分の指定コードを優先し、他の承認番号の指定コードは外す。
+    """
+    owner, by_appr = sidx.designated()
+    n_set = n_fix = 0
+    for r in final:
+        if not r.get("category"):
+            continue
+        a, eff = r["approval_no"], r.get("effective_date") or ""
+        cur = r.get("category_code")
+        no = r.get("category_no") or catmap.category_no(r["category"])
+        if not no and cur:
+            v = sidx.at(cur, eff) or (sidx.hist[cur][0][1] if cur in sidx.hist else None)
+            no = v[5] if v else None
+        cands = [x for x in by_appr.get(a, ()) if x[1] <= eff and (not x[2] or eff <= x[2])
+                 and (not no or x[4] == no)]
+        if cands:
+            if len(cands) > 1:
+                t = catmap.norm_category(r["category"])
+                cands.sort(key=lambda x: -SequenceMatcher(None, t, catmap.norm_master(x[5])).ratio())
+            if cur != cands[0][0]:
+                _set_code(r, cands[0][0], max(r.get("match_score") or 0.0, 0.9), sidx)
+                n_set += 1
+            continue
+        if cur and cur in owner and owner[cur] != a:
+            alt = [c for c in matcher.candidates(r.get("setting") or "医科", strip_designation(r["category"]), top=8)
+                   if c[0] not in owner and c[2] >= 0.6]
+            if alt:
+                _set_code(r, alt[0][0], alt[0][2], sidx)
+            else:
+                r["category_code"], r["category_beppyo"], r["match_score"] = None, None, 0.0
+            n_fix += 1
+    return n_set, n_fix
+
+
+def _set_code(r: dict, code: str, score: float, sidx: SskIndex) -> None:
+    eff = r.get("effective_date") or ""
+    v = sidx.at(code, eff) or sidx.hist[code][0][1]
+    r["category_code"], r["category_beppyo"], r["match_score"] = code, v[4], score
+    if r.get("ocr"):  # OCR 行の機能区分の表記はマスターの名称から作っているので合わせる
+        r["category"] = f"{v[5]} {v[3] or v[2]}"
+        if v[0] is not None and sidx.at(code, eff):
+            r["price"] = v[0]
 
 
 def _fmt_price(p, unit=None):
@@ -489,7 +602,8 @@ def make_events(con: sqlite3.Connection, final: list[dict], sidx: SskIndex, link
     by_appr: dict[str, list[dict]] = defaultdict(list)
     for r in final:
         by_appr[r["approval_no"]].append(r)
-    ev_rows, ap_rows, nc_rows = [], [], []
+    ev_rows, ap_rows, nc_rows, cu_rows = [], [], [], []
+    owner, desig_by_appr = sidx.designated()
     corr = defaultdict(list)
     for row in con.execute("SELECT correction_doc, correction_date, target_date, approval_no, side, category, price, "
                            "product_code FROM corrections"):
@@ -505,10 +619,26 @@ def make_events(con: sqlite3.Connection, final: list[dict], sidx: SskIndex, link
         seen_cats: dict[str, dict] = {}               # これまでに掲載された機能区分
         prod_name: dict[str, str] = {}                # 製品コード -> 製品名（直近の掲載）
         seen_kubun: set[str] = set()
+        usage: dict[str, dict] = {}                   # レセ電コード（特定器材コード）ごとの使用状況
+        move_log: dict[str, tuple] = {}               # 機能区分 → (移った日, 通知, 移り先)
         last_sales = None
         evs = []
         first = True
         for (eff, did), g in sorted(groups.items()):
+            for x in g:
+                code = x.get("category_code")
+                if not code:
+                    continue
+                u = usage.get(code)
+                if u is None:
+                    u = usage[code] = {"setting": x.get("setting"), "kubun": set(), "category": x.get("category"),
+                                       "since": eff, "since_doc": did, "products": set(), "ocr": True}
+                u["last"], u["last_doc"] = eff, did
+                u["kubun"].add(x.get("kubun") or "")
+                if x.get("product_code"):
+                    u["products"].add(x["product_code"])
+                if not x.get("ocr"):
+                    u["ocr"] = False
             kub = sorted({x.get("kubun") or "" for x in g})
             src = "notice_ocr" if any(x.get("ocr") for x in g) else "notice"
             # この通知の直前の状態（通知ごとの変更点の「変更前」）
@@ -549,6 +679,8 @@ def make_events(con: sqlite3.Connection, final: list[dict], sidx: SskIndex, link
                 old.update(newcats)
                 prod_state[code] = old
             moved_to = {nn for (_, nn) in moves}
+            for (on, nn) in moves:
+                move_log[on] = (eff, did, nn)
             if first:
                 detail = "; ".join(_cat_label(c) for c in cats.values())
                 evs.append((appr, eff, "listing_new", f"保険適用（区分{'/'.join(kub)}）",
@@ -588,7 +720,9 @@ def make_events(con: sqlite3.Connection, final: list[dict], sidx: SskIndex, link
             types, parts = [], []
             kub_n = {_norm_kubun(k) for k in kub if k}
             moves_l = [{"from": (seen_cats.get(on) or {}).get("category", on), "to": cats[nn].get("category"),
-                        "n": n, "price_from": (seen_cats.get(on) or {}).get("price"), "price_to": cats[nn].get("price")}
+                        "n": n, "price_from": (seen_cats.get(on) or {}).get("price"), "price_to": cats[nn].get("price"),
+                        "code_from": (seen_cats.get(on) or {}).get("category_code"),
+                        "code_to": cats[nn].get("category_code")}
                        for (on, nn), n in sorted(moves.items(), key=lambda t: -t[1])]
             added_l = [c.get("category") for cn, c in cats.items() if cn not in seen_cats and cn not in moved_to]
             if first:
@@ -601,7 +735,8 @@ def make_events(con: sqlite3.Connection, final: list[dict], sidx: SskIndex, link
                     parts.append(f"区分{'/'.join(sorted(kub_n))}で掲載（これまで {'/'.join(sorted(seen_kubun))}）")
                 if moves_l:
                     types.append("機能区分の変更")
-                    parts += [f"{m['from']} → {m['to']}（{m['n']}製品）" for m in moves_l[:3]]
+                    parts += [f"{m['from']}{_code_tag(m['code_from'])} → {m['to']}{_code_tag(m['code_to'])}（{m['n']}製品）"
+                              for m in moves_l[:3]]
                 if added_l:
                     types.append("機能区分の追加")
                     parts += [f"追加: {a}" for a in added_l[:3]]
@@ -627,8 +762,8 @@ def make_events(con: sqlite3.Connection, final: list[dict], sidx: SskIndex, link
                     parts.append("既存の製品・機能区分の再掲載（製品名・製品コードの記載変更など）")
             nc_rows.append((did, eff, appr, g[0].get("sales_name"), g[0].get("applicant"), "/".join(kub),
                             "/".join(sorted({x.get("action") or "" for x in g})), ",".join(types), "／".join(parts),
-                            json.dumps({"before": sorted({c.get("category") for c in before.values() if c.get("category")}),
-                                        "after": sorted({c.get("category") for c in cats.values()}),
+                            json.dumps({"before": _cat_pairs(before.values()),
+                                        "after": _cat_pairs(cats.values()),
                                         "moves": moves_l, "added": added_l, "n_products": len(by_code),
                                         "n_new": len(new_codes),
                                         "prices": {c.get("category"): c.get("price") for c in cats.values()}},
@@ -688,6 +823,8 @@ def make_events(con: sqlite3.Connection, final: list[dict], sidx: SskIndex, link
                             "機能区分の廃止" if ab <= today else "機能区分の廃止予定",
                             f"{h[-1][1][3] or h[-1][1][2]}（{ab} まで）", c.get("setting"), c.get("kubun"),
                             c.get("category"), code, h[-1][1][0], None, None, "ssk"))
+        cu_rows.extend(_code_usage_rows(appr, usage, move_log, cur_cats, sidx, owner, desig_by_appr.get(appr, ()),
+                                        today))
         evs.extend(_correction_events(appr, corr.get(appr, [])))
         evs.sort(key=lambda e: (e[1], EV_SORT.get(e[2], 9)))
         ev_rows.extend(evs)
@@ -718,6 +855,115 @@ def make_events(con: sqlite3.Connection, final: list[dict], sidx: SskIndex, link
     con.executemany("INSERT INTO events VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", ev_rows)
     con.executemany("INSERT INTO notice_changes VALUES (?,?,?,?,?,?,?,?,?,?,?)", nc_rows)
     con.executemany("INSERT INTO approvals VALUES (?,?,?,?,?,?,?,?,?,?,?)", ap_rows)
+    con.executemany("INSERT INTO code_usage VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", cu_rows)
+
+
+def _code_tag(code) -> str:
+    return f"［{code}］" if code else ""
+
+
+def _cat_pairs(cs) -> list[list]:
+    """[機能区分の表記, 特定器材コード] の一覧（重複なし・表記順）。"""
+    seen = {}
+    for c in cs:
+        if c.get("category"):
+            seen.setdefault((c.get("category"), c.get("category_code") or ""), None)
+    return [list(k) for k in sorted(seen)]
+
+
+def _code_usage_rows(appr: str, usage: dict, move_log: dict, cur_cats: dict, sidx: SskIndex, owner: dict,
+                     designated: tuple | list, today: str) -> list[tuple]:
+    """承認番号ごとのレセ電コード（特定器材コード）の使用期間。
+
+    開始 = その承認番号がそのコードの機能区分で初めて掲載された適用日。
+    終了 = 製品が別の機能区分に移った日（通知）、またはコードの廃止日（マスター）の早い方。
+    廃止されたコードは、廃止の翌日に有効な同じ名称のコード（後継）が1つだけなら、製品が別の機能区分に
+    移るまで（または現在まで）そのコードを使ったものと推定して行を足す（source = inferred）。
+    """
+    def last(code):
+        h = sidx.hist.get(code) or []
+        return h[-1][1] if h else None
+
+    def name_of(code):
+        v = last(code)
+        return (v[3] or v[2]) if v else None
+
+    def abol(code):
+        v = last(code)
+        return v[6] if v else ""
+
+    def setting_of(code):
+        v = last(code)
+        return "歯科" if v and v[4] in ("4", "5", "6", "7") else "医科"
+
+    def ab_reason(ab):
+        return "廃止" if ab <= today else "廃止予定"
+
+    def chain(code, ab, end, end_reason, end_next, kubun, n):
+        rows = []
+        cur = code
+        for _ in range(6):
+            succ = sidx.successors(cur)
+            if len(succ) != 1 or ab > today or succ[0] in usage:
+                break
+            s = succ[0]
+            since = (date.fromisoformat(ab) + timedelta(days=1)).isoformat()
+            if end and since >= end:
+                break
+            s_ab = abol(s)
+            if s_ab and (not end or s_ab < end):
+                rows.append((appr, s, setting_of(s), kubun, None, name_of(s), since, None, None, None, s_ab,
+                             ab_reason(s_ab), ",".join(sidx.successors(s)), n, "inferred", int(s in owner), 0))
+                cur, ab = s, s_ab
+                continue
+            rows.append((appr, s, setting_of(s), kubun, None, name_of(s), since, None, None, None, end or "",
+                         end_reason if end else "使用中", ",".join(end_next) if end else "", n, "inferred",
+                         int(s in owner), 0))
+            break
+        return rows
+
+    out = []
+    for code, u in usage.items():
+        ab = abol(code)
+        kubun = "/".join(sorted(k for k in u["kubun"] if k))
+        n = len(u["products"])
+        if code in cur_cats:
+            end, end_reason, end_next = "", "使用中", []
+        elif code in move_log:
+            d, _, nn = move_log[code]
+            end, end_reason, end_next = d, "機能区分の変更", ([nn] if re.fullmatch(r"\d{9}", nn or "") else [])
+        else:
+            lv = last(code)
+            end, end_reason = u["last"], "以後の掲載なし"
+            end_next = [c for c in cur_cats if re.fullmatch(r"\d{9}", c) and c in usage
+                        and usage[c]["since"] > u["since"]
+                        and (sidx.at(c, today) or (None,) * 6)[5] == (lv[5] if lv else None)][:3]
+        extra = []
+        if ab and (not end or ab < end):
+            until, reason, nxt = ab, ab_reason(ab), sidx.successors(code)
+            extra = chain(code, ab, end if end_reason == "機能区分の変更" else "", end_reason, end_next, kubun, n)
+        else:
+            until, reason, nxt = end, end_reason, end_next
+        out.append((appr, code, u["setting"], kubun, u["category"], name_of(code), u["since"], u["since_doc"],
+                    u["last"], u["last_doc"], until, reason, ",".join(nxt), n,
+                    "notice_ocr" if u["ocr"] else "notice", int(code in owner), int(u["ocr"])))
+        out.extend(extra)
+    # 通知の掲載とは対応付かなかった、この承認番号を指定したコード（マスターにのみ現れる）
+    for code, vf, ab, beppyo, kubun_no, base in designated:
+        if code in usage:
+            continue
+        out.append((appr, code, setting_of(code), "", None, name_of(code) or base, vf, None, None, None, ab or "",
+                    ab_reason(ab) if ab else "使用中", ",".join(sidx.successors(code)) if ab else "", 0, "master", 1, 0))
+        if ab:
+            out.extend(chain(code, ab, "", "", [], "", 0))
+    # 同じコードが推定と掲載の両方に出たら掲載を残す
+    seen, res = set(), []
+    for r in sorted(out, key=lambda r: (r[14] == "inferred", r[6] or "")):
+        if r[14] == "inferred" and r[1] in seen:
+            continue
+        seen.add(r[1])
+        res.append(r)
+    return sorted(res, key=lambda r: (r[6] or "", r[1]))
 
 
 EV_SORT = {"listing_new": 0, "category_changed": 1, "category_added": 2, "products_added": 3,
