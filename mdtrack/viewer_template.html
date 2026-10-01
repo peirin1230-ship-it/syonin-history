@@ -424,7 +424,8 @@ details.ph li.out { color: var(--ink-3); }
     const price = (e[6] != null || e[7] != null) && (e[1] === "price_revision" || e[1] === "notice_price_diff")
       ? `<div class="price">${yen(e[6])} → <b>${yen(e[7])}</b>${e[6] ? ` <span class="sub2" style="display:inline">（${(e[7] - e[6] >= 0 ? "+" : "") + ((e[7] - e[6]) / e[6] * 100).toFixed(1)}%）</span>` : ""}</div>` : "";
     const inN = e[8] && D.nchanges && D.nchanges[e[8]] ? ` <button class="goto" type="button" data-doc="${esc(e[8])}">この通知の変更点一覧</button>` : "";
-    const src = doc ? `<div class="src">出典: <a href="${esc(doc[1])}" target="_blank" rel="noopener">${esc(doc[0].replace(/［.*?］|（PDF：.*?）/g, ""))}</a>${inN}</div>`
+    const dt = doc ? esc(doc[0].replace(/［.*?］|（PDF：.*?）/g, "")) : "";
+    const src = doc ? `<div class="src">出典: ${doc[1] ? `<a href="${esc(doc[1])}" target="_blank" rel="noopener">${dt}</a>` : `${dt}（手元のPDFから取込・厚生局に未掲載）`}${inN}</div>`
       : e[1] === "price_revision" || e[1] === "category_abolished" || e[1] === "category_renamed" ? `<div class="src">出典: 特定器材マスター（レセ電コード ${clink(e[5])}）</div>` : "";
     const ctag = e[5] && (e[1] === "category_changed" || e[1] === "category_added") ? ` <span class="ctag">レセ電コード ${clink(e[5])}</span>` : "";
     const ocr = e[9] === "notice_ocr" ? ` <span class="pill warn" title="スキャン画像の通知をOCRで読み取った掲載です。出典PDFで確認してください">OCR</span>` : "";
@@ -733,7 +734,7 @@ details.ph li.out { color: var(--ink-3); }
       if (y !== year) { html += `<div class="ygroup">${esc(y)}年</div>`; year = y; }
       const c = n[7] || {};
       const keys = ["区分変更", "機能区分の変更", "機能区分の追加", "新規"].filter(k => c[k]);
-      const kind = n[3] === "replacement" ? "通知（別紙差替後）" : n[6].startsWith("OCR") ? "通知・OCR" : "通知";
+      const kind = n[3] === "replacement" ? "通知（別紙差替後）" : n[6].startsWith("OCR") ? "通知・OCR" : !n[5] ? "通知・手元PDF" : "通知";
       html += `<button class="nitem" type="button" role="listitem" data-doc="${esc(n[0])}" aria-current="${curDoc === n[0]}">
         <span class="nd">${esc(n[2])} 適用</span><span class="nk">${esc(kind)}・${n[8]}件</span>
         <span class="nc">${keys.map(k => `<span class="tb t-${esc(k)}">${esc(k)} ${c[k]}</span>`).join("") || `<span class="tb t-変更なし">大きな変更なし</span>`}</span></button>`;
@@ -783,7 +784,7 @@ details.ph li.out { color: var(--ink-3); }
         <div class="eyebrow">医療機器の保険適用について${n[3] === "replacement" ? "（別紙の差し替え後の内容）" : ""}${isOcr ? ` <span class="pill warn">OCR</span>` : ""}</div>
         <h2 class="sales" style="margin-top:6px">${esc(n[2])} 適用分</h2>
         <div class="meta"><span>通知日 <b class="mono">${esc(n[1])}</b></span><span>掲載 <b class="num">${n[8]}</b> 承認番号</span>
-          <span><a href="${esc(n[5])}" target="_blank" rel="noopener">${esc(title)}（PDF）</a></span></div>
+          <span>${n[5] ? `<a href="${esc(n[5])}" target="_blank" rel="noopener">${esc(title)}（PDF）</a>` : `${esc(title)} <span class="pill warn" title="厚生局のページにまだ載っていないため、受け取ったPDFから取り込んでいます。厚生局に載ると公式版に置き換わります">手元PDFから取込</span>`}</span></div>
         <div class="tiles" id="tiles">${tiles}</div>
         <p class="note" style="margin:6px 0 0">枠を押すとその種類だけに絞り込みます。比較の基準は、その承認番号のこの通知より前の掲載（平成20年10月以降）です。${isOcr ? "この通知はスキャン画像のため OCR で読み取っています。" : ""}</p>
       </article>

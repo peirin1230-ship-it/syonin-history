@@ -91,6 +91,11 @@ MEDIS のデータは `data/medis/` に置かれ、**Git には含めません**
 - 通知は毎月末に出て翌月1日から適用されます。
 - **毎月1日 9:00（日本時間）に Claude のスケジュールタスクが自動で更新します**: このリポジトリを取得して `python -m mdtrack update` を実行し、`data/manifest.json`・`data/parsed/`・`docs/` をコミットして push、共有ビューアも更新します。
 - 手元で更新するときは `python -m mdtrack update` を実行してください。`.github/workflows/monthly-update.yml` は同じ処理の手動実行用（予備）です。
+- 厚生局のページへの掲載は通知日から数日遅れることがあります。まだ載っていない通知は、PDF を手に入れて次のコマンドで取り込めます。表紙から通知の種類・通知日・適用日を読み、`local_YYYYMMDD_…` という ID で登録します。厚生局に同じ通知が載ると、次の `update` で公式版に自動で置き換わります。
+
+  ```bash
+  python -m mdtrack add-pdf 保医発0930第4号.pdf   # 取込 → DB構築 → 出力
+  ```
 
 ## リポジトリ構成
 

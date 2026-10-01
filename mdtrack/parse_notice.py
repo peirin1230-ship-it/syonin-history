@@ -746,5 +746,11 @@ def has_text(path: str, pages: int = 3) -> bool:
     return False
 
 
+def cover_text(path, pages: int = 1) -> str:
+    """表紙（1頁目）の文字。手元PDFの取り込みで通知の種類・日付を読むのに使う。"""
+    with pdfplumber.open(str(path)) as pdf:
+        return "\n".join((p.extract_text() or "") for p in pdf.pages[:pages])
+
+
 def parse_notice(path: str, doc_id: str, default_effective: str | None = None) -> NoticeParser:
     return NoticeParser(doc_id, default_effective).parse(path)

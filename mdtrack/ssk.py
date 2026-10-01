@@ -42,8 +42,8 @@ class MasterRow:
     basic_name: str       # 基本漢字名称
 
 
-def list_files(session: requests.Session | None = None) -> list[tuple[str, str]]:
-    """(URL, ファイル名) の一覧。"""
+def list_files(session: requests.Session | None = None, errors: list | None = None) -> list[tuple[str, str]]:
+    """(URL, ファイル名) の一覧。取得できなかったページの URL は errors に入れる。"""
     s = session or requests.Session()
     out, seen = [], set()
     for a in ARCHIVES:
@@ -52,6 +52,8 @@ def list_files(session: requests.Session | None = None) -> list[tuple[str, str]]
             r = s.get(url, headers={"User-Agent": UA}, timeout=60)
             r.raise_for_status()
         except Exception:  # noqa: BLE001
+            if errors is not None:
+                errors.append(url)
             continue
         r.encoding = "utf-8"
         soup = BeautifulSoup(r.text, "html.parser")

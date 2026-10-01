@@ -27,10 +27,19 @@ def step_fetch(p: Paths, index_url: str = fetch.DEFAULT_INDEX_URL, log=print) ->
     links = fetch.fetch_index(index_url)
     old = {m.doc_id: m for m in fetch.load_manifest(p.manifest)} if p.manifest.exists() else {}
     new = [m for m in links if m.doc_id not in old]
-    merged = links + [m for d, m in old.items() if d not in {x.doc_id for x in links}]
+    # 手元のPDFから取り込んだ通知（add-pdf）は、厚生局に同じ通知が載ったら公式版に置き換える
+    official = {fetch.same_notice_key(m) for m in links}
+    replaced = [m for d, m in old.items() if d.startswith(fetch.LOCAL_PREFIX) and fetch.same_notice_key(m) in official]
+    for m in replaced:
+        for f in (parsed_path(p, m.doc_id), p.pdf / f"{m.doc_id}.pdf"):
+            f.unlink(missing_ok=True)
+        log(f"  手元PDFの通知を公式版に置換: {m.title[:50]}")
+    drop = {x.doc_id for x in links} | {m.doc_id for m in replaced}
+    merged = links + [m for d, m in old.items() if d not in drop]
     p.data.mkdir(parents=True, exist_ok=True)
     fetch.save_manifest(merged, p.manifest)
-    log(f"  通知 {len(links)}本（新規 {len(new)}本）")
+    n_local = sum(1 for m in merged if m.doc_id.startswith(fetch.LOCAL_PREFIX))
+    log(f"  通知 {len(links)}本（新規 {len(new)}本）" + (f"／厚生局に未掲載で手元PDFから取込済み {n_local}本" if n_local else ""))
     # 解析済み（キャッシュが現行バージョン）の通知はPDFを再取得しない
     need = []
     for m in merged:
@@ -45,11 +54,49 @@ def step_fetch(p: Paths, index_url: str = fetch.DEFAULT_INDEX_URL, log=print) ->
     return new
 
 
+def step_add_pdf(p: Paths, pdf_path: Path, log=print) -> fetch.NoticeLink:
+    """厚生局のページにまだ載っていない通知を、手元のPDFから取り込む。
+
+    PDF の表紙（保医発の番号・通知日・「…から新たに保険適用」）から通知の種類と日付を読み、
+    manifest に doc_id「local_YYYYMMDD_番号」で登録して解析する。厚生局に同じ通知（種類・通知日・
+    適用日が同じ）が載ると、次の update で公式版に置き換わる。
+    """
+    import shutil
+    link = fetch.link_from_local_pdf(pdf_path, parse_notice.cover_text(pdf_path))
+    manifest = fetch.load_manifest(p.manifest) if p.manifest.exists() else []
+    if any(fetch.same_notice_key(m) == fetch.same_notice_key(link) and not m.doc_id.startswith(fetch.LOCAL_PREFIX)
+           for m in manifest):
+        log(f"同じ通知が厚生局のページから取得済みです: {link.title}")
+        return link
+    manifest = [m for m in manifest if m.doc_id != link.doc_id] + [link]
+    fetch.save_manifest(manifest, p.manifest)
+    p.pdf.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(pdf_path, p.pdf / f"{link.doc_id}.pdf")
+    p.parsed.mkdir(parents=True, exist_ok=True)
+    doc_id, n, scanned, err = _parse_one((str(p.pdf / f"{link.doc_id}.pdf"), str(parsed_path(p, link.doc_id)),
+                                          link.doc_id, link.effective_date))
+    log(f"手元PDFを取込: {link.title}")
+    log(f"  doc_id {doc_id} / 種類 {link.kind} / 通知日 {link.notice_date} / 適用日 {link.effective_date} / "
+        f"{'スキャン画像（要OCR）' if scanned else f'{n}行'}" + (f" / エラー {err}" if err else ""))
+    return link
+
+
 def step_ssk(p: Paths, log=print) -> None:
     log("特定器材マスターを取得中…")
-    files = ssk.list_files()
+    errors: list = []
+    files = ssk.list_files(errors=errors)
     ssk.download(files, p.ssk, log=log)
     log(f"  ファイル {len(files)}件")
+    # 掲載から外れた古いファイル（差し替えられた全件ファイルなど）を消して、新規取得と同じ状態にする。
+    # 一覧ページを1つでも取得できなかったときは消さない
+    if files and not errors:
+        listed = {name for _, name in files}
+        for f in p.ssk.glob("*"):
+            if f.is_file() and f.name not in listed:
+                f.unlink()
+                log(f"  掲載終了のため削除: {f.name}")
+    elif errors:
+        log(f"  一覧を取得できなかったページ: {len(errors)}件")
 
 
 def parsed_path(p: "Paths", doc_id: str) -> Path:

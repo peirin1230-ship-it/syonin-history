@@ -100,3 +100,16 @@ def test_designated_codes_and_successors():
     assert by_appr["22500BZX00294000"][0][:3] == ("710010739", "2013-10-01", "2015-09-30")
     assert sidx.successors("710010739") == ["710010737"]
     assert sidx.successors("710010737") == []
+
+
+def test_local_pdf_link():
+    from pathlib import Path
+    from mdtrack import fetch
+    cover = ("保 医 発0930第４号\n令和８年９月30日\n地 方 厚 生 ( 支 ) 局 医 療 課 長 殿\n医療機器の保険適用について\n"
+             "標記について、別紙のとおり令和８年 10 月１日から新たに保険適用とするので通知する。")
+    ln = fetch.link_from_local_pdf(Path("x.pdf"), cover)
+    assert (ln.doc_id, ln.kind, ln.notice_date, ln.effective_date) == (
+        "local_20260930_notice_4", "notice", "2026-09-30", "2026-10-01")
+    official = fetch.NoticeLink("000503000", "医療機器の保険適用について（令和8年10月1日から新たに適用）（令和8年9月30日）",
+                                "https://example/000503000.pdf", "notice", "2026-09-30", "2026-10-01", "令和8年度通知")
+    assert fetch.same_notice_key(ln) == fetch.same_notice_key(official)

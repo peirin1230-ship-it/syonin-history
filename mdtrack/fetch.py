@@ -119,6 +119,42 @@ def download_all(links: list[NoticeLink], pdf_dir: Path, delay: float = 1.0,
     return got
 
 
+LOCAL_PREFIX = "local_"
+
+
+def same_notice_key(m: NoticeLink) -> tuple:
+    """同じ通知かどうかの判定キー（種類・通知日・適用日）。手元PDFと公式版の突き合わせに使う。"""
+    return (m.kind, m.notice_date, m.effective_date if m.kind == "notice" else None)
+
+
+def link_from_local_pdf(pdf_path: Path, cover: str) -> NoticeLink:
+    """手元のPDFの表紙の文字から NoticeLink を作る（URL は空）。"""
+    t = jpdate.normalize(cover)
+    flat = re.sub(r"\s+", "", t)
+    if "医療機器の保険適用について" not in flat:
+        raise ValueError("「医療機器の保険適用について」の通知ではないようです")
+    kind = classify("医療機器の保険適用について（" + ("一部訂正" if "一部訂正" in flat else
+                                                   "差し替え" if ("差し替え" in flat or "差替" in flat) else
+                                                   "一部改正" if "一部改正" in flat else "") + "）") or "notice"
+    m = re.search(r"保医発(\d{4})第(\d+)号", flat)
+    dates = jpdate.parse_all(flat)
+    nd = dates[0] if dates else None
+    eff = None
+    me = re.search(r"((?:令和|平成)(?:元|\d+)年\d+月\d+日)から", flat)
+    if me:
+        eff = jpdate.parse_first(me.group(1))
+    if not nd:
+        raise ValueError("通知日が読み取れません")
+    no = m.group(2) if m else "0"
+    era = lambda d: f"令和{d.year - 2018}年{d.month}月{d.day}日"
+    label = {"notice": "", "correction": "の一部訂正", "replacement": "（別紙の差し替え）", "amendment": "の一部改正"}[kind]
+    title = (f"医療機器の保険適用について{label}"
+             + (f"（{era(eff)}から新たに適用）" if eff and kind == "notice" else "")
+             + f"（{era(nd)}）［手元PDF・保医発{m.group(1) if m else ''}第{no}号］")
+    return NoticeLink(f"{LOCAL_PREFIX}{nd.strftime('%Y%m%d')}_{kind}_{no}", title, "", kind, nd.isoformat(),
+                      eff.isoformat() if eff else None, "手元PDF（厚生局に未掲載）")
+
+
 def save_manifest(links: list[NoticeLink], path: Path) -> None:
     path.write_text(json.dumps([asdict(x) for x in links], ensure_ascii=False, indent=1), encoding="utf-8")
 
