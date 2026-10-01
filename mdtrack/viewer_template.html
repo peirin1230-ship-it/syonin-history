@@ -167,16 +167,78 @@ td.r, th.r { text-align: right; }
 .medis { border-left: 3px solid var(--ev-cat); }
 .empty { color: var(--ink-3); padding: 18px; text-align: center; }
 #loading { padding: 40px 0; color: var(--ink-3); }
-@media (prefers-reduced-motion: no-preference) { .item, .chip { transition: background-color .12s; } }
+
+/* タブ */
+.tabs { display: flex; gap: 4px; width: 100%; order: 3; margin-top: 4px; }
+.tabs button { border: 1px solid var(--rule); background: var(--sheet); color: var(--ink-2); border-radius: var(--r) var(--r) 0 0;
+  padding: 7px 16px; font-weight: 700; cursor: pointer; border-bottom-color: transparent; font-size: 13.5px; }
+.tabs button[aria-selected="true"] { background: var(--ai); border-color: var(--ai); color: var(--sheet); }
+/* 通知ごと */
+.nitem { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 8px; padding: 9px 12px; width: 100%; text-align: left;
+  background: none; border: 0; border-bottom: 1px solid var(--rule-2); cursor: pointer; }
+.nitem:hover { background: var(--ai-soft); }
+.nitem[aria-current="true"] { background: var(--ai-soft); box-shadow: inset 3px 0 0 var(--ai); }
+.nitem .nd { font-family: var(--f-mono); font-weight: 500; }
+.nitem .nk { font-size: 11.5px; color: var(--ink-3); }
+.nitem .nc { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 4px; }
+.ygroup { padding: 6px 12px; font-size: 11.5px; font-weight: 700; letter-spacing: .08em; color: var(--ink-3); background: var(--paper);
+  border-bottom: 1px solid var(--rule-2); position: sticky; top: 0; }
+.tb { display: inline-block; font-size: 11px; line-height: 18px; padding: 0 6px; border-radius: 4px; white-space: nowrap;
+  background: var(--rule-2); color: var(--ink-2); }
+.tb.t-新規 { background: var(--ai-soft); color: var(--ai); }
+.tb.t-区分変更 { background: var(--bad-bg); color: var(--bad-fg); font-weight: 700; }
+.tb.t-機能区分の変更 { background: var(--ev-cat); color: var(--sheet); font-weight: 700; }
+.tb.t-機能区分の追加 { color: var(--ev-cat); box-shadow: inset 0 0 0 1px var(--ev-cat); background: transparent; }
+.tb.t-価格差 { background: var(--warn-bg); color: var(--warn-fg); }
+.tb.t-変更なし { background: transparent; color: var(--ink-3); box-shadow: inset 0 0 0 1px var(--rule); }
+.tb.t-訂正 { color: var(--ev-corr); box-shadow: inset 0 0 0 1px var(--ev-corr); background: transparent; }
+.tiles { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 4px; }
+.tile { border: 1px solid var(--rule); border-radius: var(--r); padding: 6px 12px; background: var(--sheet); cursor: pointer; text-align: left; min-width: 92px; }
+.tile b { display: block; font-size: 20px; font-family: var(--f-mono); font-weight: 500; color: var(--ink); }
+.tile span { font-size: 12px; color: var(--ink-2); }
+.tile[aria-pressed="true"] { border-color: var(--ai); box-shadow: inset 0 0 0 1px var(--ai); }
+.ncrow { display: grid; grid-template-columns: minmax(150px, 210px) minmax(0, 1fr); gap: 4px 16px; padding: 10px 0; border-bottom: 1px solid var(--rule-2); }
+@media (max-width: 640px) { .ncrow { grid-template-columns: minmax(0, 1fr); } }
+.ncrow .who button { all: unset; cursor: pointer; font-family: var(--f-mono); color: var(--ai); font-size: 13px; }
+.ncrow .who button:focus-visible { outline: 2px solid var(--ai); }
+.ncrow .who .sn { font-weight: 700; font-size: 13px; overflow-wrap: anywhere; }
+.ncrow .who .ap { font-size: 12px; color: var(--ink-3); }
+.ncrow .what { min-width: 0; }
+.ncrow .what .bs { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 3px; }
+.ncrow .what .sm { font-size: 13px; color: var(--ink-2); overflow-wrap: anywhere; }
+.ncrow details { margin-top: 4px; font-size: 12.5px; }
+.ncrow details summary { cursor: pointer; color: var(--ai); }
+.ba { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px 16px; margin-top: 6px; }
+@media (max-width: 640px) { .ba { grid-template-columns: minmax(0, 1fr); } }
+.ba h4 { margin: 0 0 2px; font-size: 11.5px; color: var(--ink-3); letter-spacing: .06em; }
+.ba ul { margin: 0; padding-left: 1.1em; }
+.ba li.new { color: var(--ev-cat); font-weight: 700; }
+.ba li.gone { color: var(--ink-3); text-decoration: line-through; }
+.nsearch { width: 100%; max-width: 360px; padding: 7px 10px; border: 1px solid var(--rule); border-radius: var(--r); background: var(--sheet); }
+.goto { border: 0; background: none; color: var(--ai); cursor: pointer; padding: 0; font-size: 12px; text-decoration: underline; }
+@media (prefers-reduced-motion: no-preference) { .item, .chip, .nitem, .tile { transition: background-color .12s; } }
 </style>
 
 <header class="top">
   <h1>承認番号 償還履歴</h1>
   <span class="sub">特定保険医療材料（B・C区分）の保険適用・機能区分・償還価格の変遷</span>
   <div class="coverage" id="coverage"></div>
+  <nav class="tabs" role="tablist" aria-label="表示の切り替え">
+    <button type="button" role="tab" id="tabN" aria-selected="true">通知ごとの変更点</button>
+    <button type="button" role="tab" id="tabA" aria-selected="false">承認番号で探す</button>
+  </nav>
 </header>
 
-<main>
+<main id="viewN">
+  <section class="finder" aria-label="通知の一覧">
+    <div class="eyebrow">保医発「医療機器の保険適用について」（適用開始日の新しい順）</div>
+    <div class="count"><span id="ncount"></span><span>件数は承認番号の数</span></div>
+    <div class="list" id="nlist" role="list"></div>
+  </section>
+  <section class="ledger" id="ndetail" aria-live="polite"></section>
+</main>
+
+<main id="viewA" hidden>
   <section class="finder" aria-label="検索">
     <div class="search">
       <label for="q" class="eyebrow">承認番号・販売名・企業名・JAN・機能区分で検索</label>
@@ -300,7 +362,8 @@ td.r, th.r { text-align: right; }
     const doc = e[8] && D.docs[e[8]];
     const price = (e[6] != null || e[7] != null) && (e[1] === "price_revision" || e[1] === "notice_price_diff")
       ? `<div class="price">${yen(e[6])} → <b>${yen(e[7])}</b>${e[6] ? ` <span class="sub2" style="display:inline">（${(e[7] - e[6] >= 0 ? "+" : "") + ((e[7] - e[6]) / e[6] * 100).toFixed(1)}%）</span>` : ""}</div>` : "";
-    const src = doc ? `<div class="src">出典: <a href="${esc(doc[1])}" target="_blank" rel="noopener">${esc(doc[0].replace(/［.*?］|（PDF：.*?）/g, ""))}</a></div>`
+    const inN = e[8] && D.nchanges && D.nchanges[e[8]] ? ` <button class="goto" type="button" data-doc="${esc(e[8])}">この通知の変更点一覧</button>` : "";
+    const src = doc ? `<div class="src">出典: <a href="${esc(doc[1])}" target="_blank" rel="noopener">${esc(doc[0].replace(/［.*?］|（PDF：.*?）/g, ""))}</a>${inN}</div>`
       : e[1] === "price_revision" || e[1] === "category_abolished" || e[1] === "category_renamed" ? `<div class="src">出典: 特定器材マスター（コード <span class="mono">${esc(e[5])}</span>）</div>` : "";
     const ocr = e[9] === "notice_ocr" ? ` <span class="pill warn" title="スキャン画像の通知をOCRで読み取った掲載です。出典PDFで確認してください">OCR</span>` : "";
     return `<li class="ev-${esc(e[1])}"><div class="d">${esc(e[0])}</div><div class="rail"><span class="dot"></span></div>
@@ -350,6 +413,7 @@ td.r, th.r { text-align: right; }
         <div class="tbl-wrap"><table><thead><tr><th>製品コード</th><th>製品名</th><th>初掲載</th><th>区分番号</th></tr></thead><tbody>${prodRows}</tbody></table></div>
         ${prods.length > PROD_LIMIT ? `<p><button class="toggle" type="button" id="prodToggle">すべて表示（${prods.length.toLocaleString()} 件）</button></p>` : ""}
       </article>`;
+    $("#ledger").querySelectorAll(".goto").forEach(b => b.onclick = () => { showView("N"); renderNotice(b.dataset.doc); });
     const pt = $("#prodToggle");
     if (pt) pt.onclick = () => { document.querySelectorAll(".more-prod").forEach(tr => tr.hidden = false); pt.remove(); };
     try { history.replaceState(null, "", "#" + no); } catch (e) {}
@@ -390,6 +454,109 @@ td.r, th.r { text-align: right; }
     $("#ledger").querySelectorAll(".feed button").forEach(b => b.onclick = () => renderApproval(b.dataset.no));
   }
 
+
+  // ---------------- 通知ごとの変更点 ----------------
+  const TYPES = ["区分変更", "機能区分の変更", "機能区分の追加", "価格差", "新規", "製品名変更", "販売名変更", "製品追加", "変更なし"];
+  const TYPE_NOTE = {
+    "新規": "この通知で初めてB・C区分に掲載された承認番号",
+    "区分変更": "以前と異なる保険適用区分（例: B1→C1、B1→B2）で掲載",
+    "機能区分の変更": "既存の製品が同じ区分番号の別の機能区分に移った（改定時の見直しなど）",
+    "機能区分の追加": "既存の承認番号に新しい機能区分が加わった",
+    "製品追加": "新しい製品コードの追加",
+    "製品名変更": "既存の製品コードの製品名が変わった",
+    "販売名変更": "販売名の表記が変わった",
+    "価格差": "前回の掲載と償還価格が異なり、改定では説明できない",
+    "変更なし": "既存の製品・機能区分の再掲載（記載の変更のみ）"
+  };
+  let curDoc = null, typeSel = new Set();
+  const PRIO = t => { const i = TYPES.indexOf(t); return i < 0 ? 99 : i; };
+
+  function typeBadges(types) {
+    return types.map(t => `<span class="tb t-${esc(t)}">${esc(t)}</span>`).join("");
+  }
+
+  function renderNoticeList() {
+    const list = $("#nlist");
+    let html = "", year = null;
+    for (const n of D.notices) {
+      const y = (n[2] || n[1] || "").slice(0, 4);
+      if (y !== year) { html += `<div class="ygroup">${esc(y)}年</div>`; year = y; }
+      const c = n[7] || {};
+      const keys = ["区分変更", "機能区分の変更", "機能区分の追加", "新規"].filter(k => c[k]);
+      const kind = n[3] === "replacement" ? "通知（別紙差替後）" : n[6].startsWith("OCR") ? "通知・OCR" : "通知";
+      html += `<button class="nitem" type="button" role="listitem" data-doc="${esc(n[0])}" aria-current="${curDoc === n[0]}">
+        <span class="nd">${esc(n[2])} 適用</span><span class="nk">${esc(kind)}・${n[8]}件</span>
+        <span class="nc">${keys.map(k => `<span class="tb t-${esc(k)}">${esc(k)} ${c[k]}</span>`).join("") || `<span class="tb t-変更なし">大きな変更なし</span>`}</span></button>`;
+    }
+    list.innerHTML = html;
+    $("#ncount").textContent = `${D.notices.length} 本の通知`;
+  }
+
+  function renderNotice(doc) {
+    curDoc = doc;
+    document.querySelectorAll(".nitem").forEach(b => b.setAttribute("aria-current", b.dataset.doc === doc));
+    const n = D.notices.find(x => x[0] === doc);
+    if (!n) return;
+    const rowsAll = (D.nchanges[doc] || []).slice();
+    const corr = D.corr_by_target[doc] || [];
+    const corrAppr = new Set(corr.map(x => x[1]));
+    const c = n[7] || {};
+    const isOcr = n[6].startsWith("OCR");
+    const q = norm(($("#nq") || {}).value || "");
+    const rowsF = rowsAll.filter(r => {
+      const types = r[5].split(",");
+      if (typeSel.size && !types.some(t => typeSel.has(t)) && !(typeSel.has("訂正") && corrAppr.has(r[0]))) return false;
+      if (q && !norm(r[0] + r[1] + r[2]).includes(q)) return false;
+      return true;
+    }).sort((a, b) => Math.min(...a[5].split(",").map(PRIO)) - Math.min(...b[5].split(",").map(PRIO)) || a[0].localeCompare(b[0]));
+    const tiles = TYPES.filter(t => c[t]).map(t => `<button class="tile" type="button" data-t="${esc(t)}" aria-pressed="${typeSel.has(t)}" title="${esc(TYPE_NOTE[t])}"><b>${c[t]}</b><span>${esc(t)}</span></button>`).join("")
+      + (corr.length ? `<button class="tile" type="button" data-t="訂正" aria-pressed="${typeSel.has("訂正")}" title="この通知に対する一部訂正で直された承認番号"><b>${corrAppr.size}</b><span>あとで訂正</span></button>` : "");
+    const rowsHtml = rowsF.map(r => {
+      const types = r[5].split(",");
+      const before = new Set(r[7]), after = new Set(r[8]);
+      const moves = r[9] || [];
+      const detail = (types.includes("新規") ? "" : `<details><summary>変更前と変更後の機能区分</summary><div class="ba">
+          <div><h4>この通知の前</h4><ul>${r[7].map(x => `<li class="${after.has(x) ? "" : (moves.some(m => m.from === x) ? "gone" : "")}">${esc(x)}</li>`).join("") || "<li>—</li>"}</ul></div>
+          <div><h4>この通知での掲載</h4><ul>${r[8].map(x => `<li class="${before.has(x) ? "" : "new"}">${esc(x)}</li>`).join("") || "<li>—</li>"}</ul></div></div></details>`);
+      return `<div class="ncrow"><div class="who"><button type="button" data-no="${esc(r[0])}">${esc(r[0])}</button>
+          <div class="sn">${esc(r[1])}</div><div class="ap">${esc(r[2])}・区分${esc(r[3])}・製品${r[10]}件</div></div>
+        <div class="what"><div class="bs">${typeBadges(types)}${corrAppr.has(r[0]) ? `<span class="tb t-訂正">あとで訂正</span>` : ""}</div>
+          <div class="sm">${esc(r[6])}</div>${detail}</div></div>`;
+    }).join("");
+    const title = n[4].replace(/［.*?］|（PDF：.*?）/g, "");
+    $("#ndetail").innerHTML = `
+      <article class="sheet">
+        <div class="eyebrow">医療機器の保険適用について${n[3] === "replacement" ? "（別紙の差し替え後の内容）" : ""}${isOcr ? ` <span class="pill warn">OCR</span>` : ""}</div>
+        <h2 class="sales" style="margin-top:6px">${esc(n[2])} 適用分</h2>
+        <div class="meta"><span>通知日 <b class="mono">${esc(n[1])}</b></span><span>掲載 <b class="num">${n[8]}</b> 承認番号</span>
+          <span><a href="${esc(n[5])}" target="_blank" rel="noopener">${esc(title)}（PDF）</a></span></div>
+        <div class="tiles" id="tiles">${tiles}</div>
+        <p class="note" style="margin:6px 0 0">枠を押すとその種類だけに絞り込みます。比較の基準は、その承認番号のこの通知より前の掲載（平成20年10月以降）です。${isOcr ? "この通知はスキャン画像のため OCR で読み取っています。" : ""}</p>
+      </article>
+      <article class="sheet">
+        <h3>掲載された承認番号 <small>${rowsF.length} / ${rowsAll.length} 件・変更の大きい順</small></h3>
+        <input id="nq" class="nsearch" type="search" placeholder="この通知の中を承認番号・販売名・企業名で検索" value="${esc(($("#nq") || {}).value || "")}" autocomplete="off">
+        <div>${rowsHtml || `<div class="empty">該当する承認番号がありません。</div>`}</div>
+      </article>`;
+    $("#tiles").onclick = e => {
+      const b = e.target.closest(".tile"); if (!b) return;
+      const t = b.dataset.t; typeSel.has(t) ? typeSel.delete(t) : typeSel.add(t);
+      renderNotice(doc);
+    };
+    const nq = $("#nq");
+    let tm; nq.oninput = () => { clearTimeout(tm); tm = setTimeout(() => { const pos = nq.selectionStart; renderNotice(doc); const n2 = $("#nq"); n2.focus(); try { n2.setSelectionRange(pos, pos); } catch (e) {} }, 200); };
+    $("#ndetail").querySelectorAll(".who button").forEach(b => b.onclick = () => { showView("A"); renderApproval(b.dataset.no); });
+    try { history.replaceState(null, "", "#n-" + doc); } catch (e) {}
+    if (window.matchMedia("(max-width: 860px)").matches) $("#ndetail").scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  function showView(v) {
+    $("#viewN").hidden = v !== "N";
+    $("#viewA").hidden = v !== "A";
+    $("#tabN").setAttribute("aria-selected", v === "N");
+    $("#tabA").setAttribute("aria-selected", v === "A");
+  }
+
   function coverage() {
     const s = D.notice_stats || {};
     const nM = D.approvals.filter(a => (a[8] || "").includes("MEDISのみ")).length;
@@ -400,9 +567,15 @@ td.r, th.r { text-align: right; }
   }
 
   load().then(d => {
-    D = d; index(); coverage(); buildChips(); renderList();
+    D = d; index(); coverage(); buildChips(); renderList(); renderNoticeList();
     const h = decodeURIComponent(location.hash.slice(1));
-    if (h && D.events[h]) renderApproval(h); else renderHome();
+    renderHome();
+    if (h && D.events[h]) { showView("A"); renderApproval(h); }
+    else if (h.startsWith("n-") && D.nchanges[h.slice(2)]) { showView("N"); renderNotice(h.slice(2)); }
+    else { showView("N"); if (D.notices.length) renderNotice(D.notices[0][0]); }
+    $("#tabN").onclick = () => { showView("N"); if (!curDoc && D.notices.length) renderNotice(D.notices[0][0]); };
+    $("#tabA").onclick = () => showView("A");
+    $("#nlist").addEventListener("click", e => { const b = e.target.closest(".nitem"); if (b) { typeSel.clear(); renderNotice(b.dataset.doc); } });
     let t; $("#q").addEventListener("input", () => { clearTimeout(t); t = setTimeout(() => { shown = 200; renderList(); }, 120); });
     $("#list").addEventListener("click", e => { const b = e.target.closest(".item"); if (b) renderApproval(b.dataset.no); });
   }).catch(err => { $("#ledger").innerHTML = `<div class="sheet">${esc(err.message)}</div>`; });

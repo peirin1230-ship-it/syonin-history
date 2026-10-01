@@ -108,9 +108,32 @@ def build_payload(p: Paths, include_medis: bool) -> dict:
                    for c in m["codes"]]
             aps.append([appr, m.get("sales") or "", m.get("maker") or "", "", "", "MEDIS", m["n_jan"], cur,
                         "MEDISのみ（通知の解析範囲外）"])
+    # 通知ごとの変更点
+    nchanges: dict[str, list] = {}
+    counts: dict[str, dict] = {}
+    for r in con.execute("SELECT doc_id, approval_no, sales_name, applicant, kubun, actions, change_types, summary, "
+                         "detail_json FROM notice_changes ORDER BY doc_id, approval_no"):
+        d = json.loads(r[8])
+        nchanges.setdefault(r[0], []).append([r[1], r[2] or "", r[3] or "", r[4] or "", r[5] or "", r[6], r[7],
+                                              d.get("before", []), d.get("after", []), d.get("moves", []),
+                                              d.get("n_products", 0), d.get("n_new", 0)])
+        c = counts.setdefault(r[0], {})
+        for t in r[6].split(","):
+            c[t] = c.get(t, 0) + 1
+    corr_by_target: dict[str, list] = {}
+    for r in con.execute("SELECT DISTINCT target_doc, correction_doc, approval_no FROM corrections "
+                         "WHERE target_doc IS NOT NULL"):
+        corr_by_target.setdefault(r[0], []).append([r[1], r[2]])
+    notices = []
+    for r in con.execute("SELECT n.doc_id, n.notice_date, MIN(c.effective_date), n.kind, n.title, n.url, n.status "
+                         "FROM notices n JOIN notice_changes c USING(doc_id) GROUP BY n.doc_id "
+                         "ORDER BY MIN(c.effective_date) DESC, n.notice_date DESC"):
+        notices.append([r[0], r[1] or "", r[2] or "", r[3], r[4], r[5], r[6], counts.get(r[0], {}),
+                        len(nchanges.get(r[0], []))])
     payload = {
         "built_at": built[0] if built else "", "span": list(span), "notice_stats": stats,
         "approvals": aps, "events": evs, "products": prods, "docs": docs, "medis": medis,
+        "notices": notices, "nchanges": nchanges, "corr_by_target": corr_by_target,
     }
     return payload
 
@@ -202,10 +225,18 @@ def write_excel(p: Paths, path: Path, with_listing: bool = True) -> None:
                      "ORDER BY h.code, h.valid_from").fetchall()
     sheet("機能区分の価格履歴", ["特定器材コード", "基本名称", "名称", "別表", "区分番号", "変更年月日", "価格(円)",
                          "単位", "廃止年月日"], sh, [12, 60, 34, 6, 8, 11, 11, 8, 11])
+    ncs = con.execute("SELECT c.effective_date, n.notice_date, c.approval_no, c.sales_name, c.applicant, c.kubun, "
+                      "c.change_types, c.summary, CASE c.ocr WHEN 1 THEN 'OCR' ELSE '' END, n.title "
+                      "FROM notice_changes c LEFT JOIN notices n USING(doc_id) "
+                      "ORDER BY c.effective_date DESC, c.approval_no").fetchall()
+    sheet("通知ごとの変更点", ["適用開始日", "通知日", "承認番号", "販売名", "保険適用希望者", "区分", "変更の種類",
+                         "内容", "読取", "通知"], ncs, [11, 11, 19, 30, 24, 7, 22, 80, 6, 50])
     nt = con.execute("SELECT notice_date, effective_date, CASE kind WHEN 'notice' THEN '通知' WHEN 'correction' "
                      "THEN '訂正' WHEN 'replacement' THEN '差替' ELSE kind END, title, status, n_rows, url "
                      "FROM notices ORDER BY notice_date DESC").fetchall()
     sheet("通知一覧", ["通知日", "適用日", "種別", "標題", "状態", "行数", "URL"], nt, [11, 11, 6, 70, 18, 7, 60])
+    if "通知ごとの変更点" in wb.sheetnames:
+        wb.move_sheet("通知ごとの変更点", offset=-wb.sheetnames.index("通知ごとの変更点"))
     path.parent.mkdir(parents=True, exist_ok=True)
     wb.save(path)
 

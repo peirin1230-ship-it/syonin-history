@@ -72,3 +72,9 @@ def test_ocr_fix_approval_positions():
     assert fix_approval("2O6OOBZZOO666AO1") == "20600BZZ00666A01"
     assert fix_approval("22OADBZXOO121OOO") == "220ADBZX00121000"
     assert fix_approval("21800B2X10056000") == "21800BZX10056000"
+
+
+def test_notice_change_helpers():
+    from mdtrack.db import _nm, _norm_kubun
+    assert _norm_kubun("B") == "B1" and _norm_kubun("C1") == "C1" and _norm_kubun("C") == "C?"
+    assert _nm("ＫＺＲ－ＣＡＤ ファイバーブロック") == _nm("ＫＺＲ―ＣＡＤ　ファイバーブロック")

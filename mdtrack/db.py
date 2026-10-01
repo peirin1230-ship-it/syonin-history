@@ -20,6 +20,7 @@ SCHEMA = """
 DROP TABLE IF EXISTS notices; DROP TABLE IF EXISTS raw_rows; DROP TABLE IF EXISTS listing;
 DROP TABLE IF EXISTS ssk_history; DROP TABLE IF EXISTS category_map; DROP TABLE IF EXISTS events;
 DROP TABLE IF EXISTS approvals; DROP TABLE IF EXISTS corrections; DROP TABLE IF EXISTS meta;
+DROP TABLE IF EXISTS notice_changes;
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE notices(doc_id TEXT PRIMARY KEY, title TEXT, url TEXT, kind TEXT, notice_date TEXT,
   effective_date TEXT, fiscal_section TEXT, status TEXT, n_rows INTEGER, warnings TEXT);
@@ -45,6 +46,9 @@ CREATE TABLE events(approval_no TEXT, date TEXT, type TEXT, title TEXT, detail T
   kubun TEXT, category TEXT, category_code TEXT, price_before REAL, price_after REAL, doc_id TEXT,
   source TEXT);
 CREATE INDEX ix_events_appr ON events(approval_no, date);
+CREATE TABLE notice_changes(doc_id TEXT, effective_date TEXT, approval_no TEXT, sales_name TEXT, applicant TEXT,
+  kubun TEXT, actions TEXT, change_types TEXT, summary TEXT, detail_json TEXT, ocr INTEGER);
+CREATE INDEX ix_nc_doc ON notice_changes(doc_id);
 CREATE TABLE approvals(approval_no TEXT PRIMARY KEY, sales_name TEXT, applicant TEXT, first_date TEXT,
   last_date TEXT, kubuns TEXT, n_products INTEGER, n_categories INTEGER, n_events INTEGER,
   current_json TEXT, flags TEXT);
@@ -454,6 +458,22 @@ def _fmt_price(p, unit=None):
     return f"{unit} {s}" if unit else s
 
 
+def _norm_kubun(k: str) -> str:
+    """区分の比較用。平成30年度より前の「区分B」は現在の B1 に当たる。数字の無い C は OCR の読み落とし。"""
+    k = (k or "").strip()
+    if k == "B":
+        return "B1"
+    if k == "C":
+        return "C?"
+    return k
+
+
+def _nm(s) -> str:
+    t = unicodedata.normalize("NFKC", s or "")
+    t = re.sub(r"[‐‑‒–—―−－~〜～]", "-", t)
+    return re.sub(r"[\s　・･]", "", t).upper()
+
+
 def _cat_label(c: dict) -> str:
     return f"{c.get('category')}（{_fmt_price(c.get('price'), c.get('price_unit'))}）"
 
@@ -469,7 +489,7 @@ def make_events(con: sqlite3.Connection, final: list[dict], sidx: SskIndex, link
     by_appr: dict[str, list[dict]] = defaultdict(list)
     for r in final:
         by_appr[r["approval_no"]].append(r)
-    ev_rows, ap_rows = [], []
+    ev_rows, ap_rows, nc_rows = [], [], []
     corr = defaultdict(list)
     for row in con.execute("SELECT correction_doc, correction_date, target_date, approval_no, side, category, price, "
                            "product_code FROM corrections"):
@@ -483,11 +503,22 @@ def make_events(con: sqlite3.Connection, final: list[dict], sidx: SskIndex, link
         prod_state: dict[str, dict[str, dict]] = {}   # 製品コード -> {機能区分(正規化): 行}
         nocode_state: dict[str, dict] = {}            # 製品コードの無い掲載（承認番号単位）
         seen_cats: dict[str, dict] = {}               # これまでに掲載された機能区分
+        prod_name: dict[str, str] = {}                # 製品コード -> 製品名（直近の掲載）
+        seen_kubun: set[str] = set()
+        last_sales = None
         evs = []
         first = True
         for (eff, did), g in sorted(groups.items()):
             kub = sorted({x.get("kubun") or "" for x in g})
             src = "notice_ocr" if any(x.get("ocr") for x in g) else "notice"
+            # この通知の直前の状態（通知ごとの変更点の「変更前」）
+            before = {}
+            for cs in prod_state.values():
+                for k, c in cs.items():
+                    before.setdefault(k, c)
+            for k, c in nocode_state.items():
+                before.setdefault(k, c)
+            known_codes = set(prod_state)
             cats = {}
             for x in g:
                 if x.get("category"):
@@ -552,6 +583,61 @@ def make_events(con: sqlite3.Connection, final: list[dict], sidx: SskIndex, link
                     evs.append((appr, eff, "products_added", f"製品の追加（{len(new_codes)}件）",
                                 ", ".join(names)[:300], g[0].get("setting"), "/".join(kub), None, None, None, None,
                                 did, src))
+            # ---- 通知ごとの変更点 ----
+            is_ocr = src == "notice_ocr"
+            types, parts = [], []
+            kub_n = {_norm_kubun(k) for k in kub if k}
+            moves_l = [{"from": (seen_cats.get(on) or {}).get("category", on), "to": cats[nn].get("category"),
+                        "n": n, "price_from": (seen_cats.get(on) or {}).get("price"), "price_to": cats[nn].get("price")}
+                       for (on, nn), n in sorted(moves.items(), key=lambda t: -t[1])]
+            added_l = [c.get("category") for cn, c in cats.items() if cn not in seen_cats and cn not in moved_to]
+            if first:
+                types.append("新規")
+                parts.append(f"区分{'/'.join(kub)}で保険適用（機能区分{len(cats)}・製品{len(new_codes)}件）")
+            else:
+                newk = {k for k in kub_n if k not in seen_kubun and not k.endswith("?")}
+                if newk and seen_kubun:
+                    types.append("区分変更")
+                    parts.append(f"区分{'/'.join(sorted(kub_n))}で掲載（これまで {'/'.join(sorted(seen_kubun))}）")
+                if moves_l:
+                    types.append("機能区分の変更")
+                    parts += [f"{m['from']} → {m['to']}（{m['n']}製品）" for m in moves_l[:3]]
+                if added_l:
+                    types.append("機能区分の追加")
+                    parts += [f"追加: {a}" for a in added_l[:3]]
+                if new_codes:
+                    types.append("製品追加")
+                    parts.append(f"製品 {len(new_codes)}件 追加")
+                if not is_ocr:
+                    renamed = [(cd, prod_name[cd], x.get("product_name")) for cd in set(by_code) & known_codes
+                               for x in [next(iter(by_code[cd].values()))]
+                               if cd in prod_name and _nm(prod_name[cd]) != _nm(x.get("product_name"))
+                               and x.get("product_name")]
+                    if renamed:
+                        types.append("製品名変更")
+                        parts.append(f"製品名の変更 {len(renamed)}件（例: {renamed[0][1][:20]} → {renamed[0][2][:20]}）")
+                    sales = g[0].get("sales_name")
+                    if last_sales and sales and _nm(sales) != _nm(last_sales):
+                        types.append("販売名変更")
+                        parts.append(f"販売名 {last_sales[:25]} → {sales[:25]}")
+                if any(e[11] == did and e[2] == "notice_price_diff" for e in evs):
+                    types.append("価格差")
+                if not types:
+                    types.append("変更なし")
+                    parts.append("既存の製品・機能区分の再掲載（製品名・製品コードの記載変更など）")
+            nc_rows.append((did, eff, appr, g[0].get("sales_name"), g[0].get("applicant"), "/".join(kub),
+                            "/".join(sorted({x.get("action") or "" for x in g})), ",".join(types), "／".join(parts),
+                            json.dumps({"before": sorted({c.get("category") for c in before.values() if c.get("category")}),
+                                        "after": sorted({c.get("category") for c in cats.values()}),
+                                        "moves": moves_l, "added": added_l, "n_products": len(by_code),
+                                        "n_new": len(new_codes),
+                                        "prices": {c.get("category"): c.get("price") for c in cats.values()}},
+                                       ensure_ascii=False), 1 if is_ocr else 0))
+            for x in g:
+                if x.get("product_code") and x.get("product_name"):
+                    prod_name[x["product_code"]] = x["product_name"]
+            seen_kubun |= {k for k in kub_n if not k.endswith("?")}
+            last_sales = g[0].get("sales_name") or last_sales
             for cn, c in cats.items():
                 seen_cats[cn] = c
             first = False
@@ -630,6 +716,7 @@ def make_events(con: sqlite3.Connection, final: list[dict], sidx: SskIndex, link
                         rows[-1].get("effective_date"), "/".join(sorted({r.get("kubun") or "" for r in rows})),
                         len(prod_state), len(cur), len(evs), json.dumps(cur, ensure_ascii=False), ";".join(flags)))
     con.executemany("INSERT INTO events VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", ev_rows)
+    con.executemany("INSERT INTO notice_changes VALUES (?,?,?,?,?,?,?,?,?,?,?)", nc_rows)
     con.executemany("INSERT INTO approvals VALUES (?,?,?,?,?,?,?,?,?,?,?)", ap_rows)
 
 
