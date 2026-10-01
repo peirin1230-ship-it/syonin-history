@@ -1,0 +1,16 @@
+# 再取得できる元データ（大きい）
+data/pdf/
+data/ssk/
+data/parsed/*.json
+data/*.log
+data/scanned.json
+# 生成物（ローカル）
+data/syonin.sqlite
+output/
+# MEDIS（利用規約上、再配布しない）
+data/medis/
+*.lzh
+# Python
+__pycache__/
+*.pyc
+.venv/

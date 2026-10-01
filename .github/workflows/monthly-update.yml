@@ -1,0 +1,32 @@
+name: monthly-update
+
+# 毎月の保医発通知（月末発出・翌月1日適用）を取り込み、docs/ のビューアと解析キャッシュを更新する。
+# 厚生局サイトから取得できない場合は、手元PCで `python -m mdtrack update` を実行して push してください。
+on:
+  schedule:
+    - cron: "17 0 2 * *"   # 毎月2日 09:17 JST
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - name: 取得・解析・構築・出力
+        run: python -m mdtrack update
+      - name: 変更をコミット
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/manifest.json data/parsed docs
+          if git diff --cached --quiet; then echo "変更なし"; exit 0; fi
+          git commit -m "データ更新 $(date +%Y-%m-%d)"
+          git push

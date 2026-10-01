@@ -1,0 +1,407 @@
+<title>承認番号 償還履歴</title>
+<meta name="description" content="医療機器の承認番号ごとに、特定保険医療材料（B・C区分）の保険適用・機能区分・償還価格の変更を時系列で追跡する。">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=BIZ+UDPGothic:wght@400;700&family=IBM+Plex+Mono:wght@400;500&family=Zen+Kaku+Gothic+New:wght@500;700&display=swap">
+<style>
+/* Layout: 左に検索と一覧、右に選んだ承認番号の台帳（現在の機能区分 → 時系列 → 製品）。狭い画面では縦積み。 */
+:root {
+  --paper: #f5f6f8;
+  --sheet: #ffffff;
+  --ink: #1b2433;
+  --ink-2: #4a5568;
+  --ink-3: #7a8496;
+  --rule: #dde1e8;
+  --rule-2: #eceff3;
+  --ai: #24477a;          /* 藍: アクセント */
+  --ai-soft: #e6ecf5;
+  --ev-new: #24477a;
+  --ev-cat: #1f7a6c;
+  --ev-prod: #6b7686;
+  --ev-price: #a86a12;
+  --ev-abol: #b23a3a;
+  --ev-corr: #7a4fa0;
+  --warn-bg: #fff4e0;
+  --warn-fg: #8a5300;
+  --bad-bg: #fbe9e9;
+  --bad-fg: #9b2c2c;
+  --f-display: "Zen Kaku Gothic New", "Hiragino Kaku Gothic ProN", "Yu Gothic", sans-serif;
+  --f-body: "BIZ UDPGothic", "Hiragino Kaku Gothic ProN", "Yu Gothic", "Meiryo", sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  --r: 6px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #12161d; --sheet: #1a2029; --ink: #e5e9f0; --ink-2: #b4bccb; --ink-3: #8590a3;
+    --rule: #2c3442; --rule-2: #232a35; --ai: #8fb0e6; --ai-soft: #233149;
+    --ev-new: #8fb0e6; --ev-cat: #5cc2b0; --ev-prod: #98a3b5; --ev-price: #e0a548; --ev-abol: #ef8080; --ev-corr: #b996dd;
+    --warn-bg: #3a2c14; --warn-fg: #f2c27a; --bad-bg: #3a1f22; --bad-fg: #f3a3a3;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --paper: #12161d; --sheet: #1a2029; --ink: #e5e9f0; --ink-2: #b4bccb; --ink-3: #8590a3;
+  --rule: #2c3442; --rule-2: #232a35; --ai: #8fb0e6; --ai-soft: #233149;
+  --ev-new: #8fb0e6; --ev-cat: #5cc2b0; --ev-prod: #98a3b5; --ev-price: #e0a548; --ev-abol: #ef8080; --ev-corr: #b996dd;
+  --warn-bg: #3a2c14; --warn-fg: #f2c27a; --bad-bg: #3a1f22; --bad-fg: #f3a3a3;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  background: var(--paper); color: var(--ink); font-family: var(--f-body);
+  font-size: 14px; line-height: 1.6; padding-inline: 16px; padding-block: 0;
+}
+.mono { font-family: var(--f-mono); font-variant-numeric: tabular-nums; }
+.num { font-variant-numeric: tabular-nums; }
+a { color: var(--ai); }
+button, input, select { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--ai); outline-offset: 2px; }
+
+header.top {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 20px;
+  padding-block: 18px 12px; border-bottom: 1px solid var(--rule);
+}
+header.top h1 {
+  font-family: var(--f-display); font-weight: 700; font-size: 20px; margin: 0; letter-spacing: .02em;
+}
+header.top .sub { color: var(--ink-3); font-size: 12.5px; }
+.coverage { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 12.5px; color: var(--ink-2); margin-left: auto; }
+.coverage b { font-weight: 700; color: var(--ink); }
+
+main {
+  display: grid; grid-template-columns: minmax(300px, 380px) minmax(0, 1fr); gap: 20px;
+  padding-block: 16px 40px; align-items: start;
+}
+@media (max-width: 860px) { main { grid-template-columns: minmax(0, 1fr); } }
+
+/* 左ペイン */
+.finder { position: sticky; top: env(safe-area-inset-top, 0px); display: flex; flex-direction: column; gap: 10px;
+  max-height: calc(100vh - 20px); min-width: 0; }
+@media (max-width: 860px) { .finder { position: static; max-height: none; } }
+.search { display: flex; flex-direction: column; gap: 8px; }
+.search input[type=search] {
+  width: 100%; padding: 10px 12px; border: 1px solid var(--rule); border-radius: var(--r);
+  background: var(--sheet); font-size: 15px;
+}
+.search .hint { font-size: 12px; color: var(--ink-3); }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip {
+  border: 1px solid var(--rule); background: var(--sheet); border-radius: 999px; padding: 2px 10px;
+  font-size: 12.5px; cursor: pointer; color: var(--ink-2);
+}
+.chip[aria-pressed="true"] { background: var(--ai); border-color: var(--ai); color: var(--sheet); }
+.count { font-size: 12.5px; color: var(--ink-3); display: flex; justify-content: space-between; }
+.list { overflow-y: auto; border: 1px solid var(--rule); border-radius: var(--r); background: var(--sheet); min-height: 120px; }
+@media (max-width: 860px) { .list { max-height: 55vh; } }
+.item {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 10px; padding: 9px 12px;
+  border-bottom: 1px solid var(--rule-2); cursor: pointer; width: 100%; text-align: left; background: none; border-inline: 0; border-top: 0;
+}
+.item:hover { background: var(--ai-soft); }
+.item[aria-current="true"] { background: var(--ai-soft); box-shadow: inset 3px 0 0 var(--ai); }
+.item .no { font-family: var(--f-mono); font-size: 12.5px; color: var(--ink-2); }
+.item .nm { grid-column: 1 / -1; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.item .ap { grid-column: 1 / -1; font-size: 12px; color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.item .kb { font-size: 11.5px; color: var(--ink-3); }
+.more { padding: 10px; text-align: center; }
+.more button { border: 1px solid var(--rule); background: var(--paper); border-radius: var(--r); padding: 4px 14px; cursor: pointer; }
+
+/* 右ペイン */
+.ledger { min-width: 0; display: flex; flex-direction: column; gap: 18px; }
+.sheet { background: var(--sheet); border: 1px solid var(--rule); border-radius: var(--r); padding: 18px 20px; min-width: 0; }
+@media (max-width: 520px) { .sheet { padding: 14px 14px; } }
+.eyebrow { font-size: 11.5px; letter-spacing: .08em; color: var(--ink-3); font-weight: 700; }
+h2.appr { font-family: var(--f-mono); font-weight: 500; font-size: 22px; margin: 2px 0 0; letter-spacing: .02em; word-break: break-all; }
+.sales { font-family: var(--f-display); font-weight: 700; font-size: 18px; margin: 4px 0 2px; text-wrap: balance; }
+.meta { display: flex; flex-wrap: wrap; gap: 4px 18px; color: var(--ink-2); font-size: 13px; }
+.meta span b { color: var(--ink); font-weight: 700; }
+h3 { font-family: var(--f-display); font-weight: 700; font-size: 15px; margin: 0 0 10px; display: flex; align-items: baseline; gap: 10px; }
+h3 small { font-family: var(--f-body); font-weight: 400; font-size: 12px; color: var(--ink-3); }
+.tbl-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th { text-align: left; font-weight: 700; color: var(--ink-3); font-size: 11.5px; letter-spacing: .04em; padding: 6px 8px; border-bottom: 1px solid var(--rule); white-space: nowrap; }
+td { padding: 7px 8px; border-bottom: 1px solid var(--rule-2); vertical-align: top; }
+td.r, th.r { text-align: right; }
+.pill { display: inline-block; font-size: 11px; border-radius: 4px; padding: 0 6px; line-height: 18px; white-space: nowrap; border: 1px solid currentColor; }
+.pill.bad { color: var(--bad-fg); background: var(--bad-bg); border-color: transparent; }
+.pill.warn { color: var(--warn-fg); background: var(--warn-bg); border-color: transparent; }
+.pill.k { color: var(--ai); }
+.sub2 { display: block; color: var(--ink-3); font-size: 12px; }
+
+/* 時系列 */
+.timeline { list-style: none; margin: 0; padding: 0; }
+.timeline li { display: grid; grid-template-columns: 92px 14px minmax(0, 1fr); gap: 0 10px; position: relative; }
+.timeline .d { font-family: var(--f-mono); font-size: 12.5px; color: var(--ink-2); padding-top: 9px; text-align: right; white-space: nowrap; }
+.timeline .rail { position: relative; }
+.timeline .rail::before { content: ""; position: absolute; left: 6px; top: 0; bottom: 0; width: 2px; background: var(--rule); }
+.timeline li:first-child .rail::before { top: 14px; }
+.timeline li:last-child .rail::before { bottom: calc(100% - 14px); }
+.timeline .dot { position: absolute; left: 1px; top: 11px; width: 12px; height: 12px; border-radius: 50%; background: var(--sheet); border: 3px solid var(--c, var(--ink-3)); }
+.timeline .body { padding: 6px 0 12px; min-width: 0; }
+.timeline .t { font-weight: 700; color: var(--c, var(--ink)); }
+.timeline .x { color: var(--ink-2); font-size: 13px; overflow-wrap: anywhere; }
+.timeline .src { font-size: 12px; color: var(--ink-3); }
+.timeline .price { font-family: var(--f-mono); font-size: 13px; }
+@media (max-width: 520px) {
+  .timeline li { grid-template-columns: 76px 14px minmax(0, 1fr); gap: 0 8px; }
+  .timeline .d { font-size: 11px; }
+  .tbl-wrap table { min-width: 620px; }
+}
+.ev-listing_new { --c: var(--ev-new); }
+.ev-category_added, .ev-category_changed { --c: var(--ev-cat); }
+.ev-products_added { --c: var(--ev-prod); }
+.ev-notice_price_diff, .ev-price_revision { --c: var(--ev-price); }
+.ev-category_abolished { --c: var(--ev-abol); }
+.ev-category_renamed { --c: var(--ev-cat); }
+.ev-correction { --c: var(--ev-corr); }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--ink-3); margin-bottom: 10px; }
+.legend i { display: inline-block; width: 9px; height: 9px; border-radius: 50%; border: 2.5px solid var(--c); margin-right: 5px; vertical-align: -1px; }
+.toggle { border: 0; background: none; color: var(--ai); cursor: pointer; padding: 0; font-size: 13px; }
+
+.feed .row { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 2px 12px; padding: 8px 0; border-bottom: 1px solid var(--rule-2); }
+.feed .row button { all: unset; cursor: pointer; font-family: var(--f-mono); font-size: 12.5px; color: var(--ai); }
+.feed .row button:focus-visible { outline: 2px solid var(--ai); }
+.note { font-size: 12.5px; color: var(--ink-2); line-height: 1.7; max-width: 70ch; }
+.note p { margin: 0 0 6px; }
+.medis { border-left: 3px solid var(--ev-cat); }
+.empty { color: var(--ink-3); padding: 18px; text-align: center; }
+#loading { padding: 40px 0; color: var(--ink-3); }
+@media (prefers-reduced-motion: no-preference) { .item, .chip { transition: background-color .12s; } }
+</style>
+
+<header class="top">
+  <h1>承認番号 償還履歴</h1>
+  <span class="sub">特定保険医療材料（B・C区分）の保険適用・機能区分・償還価格の変遷</span>
+  <div class="coverage" id="coverage"></div>
+</header>
+
+<main>
+  <section class="finder" aria-label="検索">
+    <div class="search">
+      <label for="q" class="eyebrow">承認番号・販売名・企業名・JAN・機能区分で検索</label>
+      <input id="q" type="search" placeholder="例: 30600BZX00280000 / マイクロカテーテル / 4580580441388 / 133" autocomplete="off">
+      <div class="chips" id="kubunChips" role="group" aria-label="区分で絞り込み"></div>
+      <div class="chips" id="flagChips" role="group" aria-label="状態で絞り込み"></div>
+    </div>
+    <div class="count"><span id="count"></span><span id="sortNote">新しい初回適用順</span></div>
+    <div class="list" id="list" role="list"></div>
+  </section>
+
+  <section class="ledger" id="ledger" aria-live="polite">
+    <div id="loading">データを展開しています…</div>
+  </section>
+</main>
+
+<script id="payload" type="application/octet-stream">__DATA_B64__</script>
+<script>
+(() => {
+  const EV = {
+    listing_new: "保険適用", category_changed: "機能区分の変更", category_added: "機能区分の追加", products_added: "製品の追加",
+    notice_price_diff: "通知上の価格差", price_revision: "償還価格の改定", category_renamed: "機能区分の名称変更",
+    category_abolished: "機能区分の廃止", correction: "訂正"
+  };
+  const $ = (s, el = document) => el.querySelector(s);
+  const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const yen = p => p == null ? "—" : "¥" + Number(p).toLocaleString("ja-JP", { maximumFractionDigits: 2 });
+  const norm = s => String(s ?? "").normalize("NFKC").toUpperCase().replace(/\s+/g, "");
+
+  let D, rows = [], shown = 200, current = null, kubunSel = new Set(), flagSel = new Set();
+
+  async function load() {
+    const b64 = $("#payload").textContent.trim();
+    const bin = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+    let text;
+    if (typeof DecompressionStream !== "undefined") {
+      const stream = new Blob([bin]).stream().pipeThrough(new DecompressionStream("gzip"));
+      text = await new Response(stream).text();
+    } else {
+      throw new Error("このブラウザはデータ展開（DecompressionStream）に対応していません。最新のChrome / Edge / Safari / Firefoxで開いてください。");
+    }
+    return JSON.parse(text);
+  }
+
+  function index() {
+    // approvals: [no, sales, applicant, first, last, kubuns, nProducts, current[], flags]
+    rows = D.approvals.map(a => {
+      const prods = D.products[a[0]] || [];
+      const evs = D.events[a[0]] || [];
+      const cats = a[7].map(c => (c.category || "") + " " + (c.master_name || "") + " " + (c.code || "")).join(" ");
+      const hay = norm([a[0], a[1], a[2], cats].join(" "));
+      const jans = prods.map(p => p[0]).join(" ");
+      const hasRev = evs.some(e => e[1] === "price_revision");
+      const hasAdd = evs.some(e => e[1] === "category_added" || e[1] === "category_changed");
+      const hasCorr = evs.some(e => e[1] === "correction");
+      const md = D.medis && D.medis.by_approval ? D.medis.by_approval[a[0]] : null;
+      const medisDiff = !!(md && (md.not_in_notice.length || md.added.length || md.removed.length || md.price_changed.length));
+      return { a, hay, jans, hasRev, hasAdd, hasCorr, abol: a[8].includes("廃止"), unk: a[8].includes("未対応"),
+               medisDiff, medisOnly: a[8].includes("MEDISのみ") };
+    });
+    rows.sort((x, y) => (y.a[3] || "").localeCompare(x.a[3] || "") || x.a[0].localeCompare(y.a[0]));
+  }
+
+  const FLAGS = [
+    ["add", "機能区分の変更・追加あり", r => r.hasAdd],
+    ["abol", "廃止済の機能区分あり", r => r.abol],
+    ["corr", "訂正あり", r => r.hasCorr],
+    ["unk", "マスター未対応", r => r.unk],
+    ["medis", "MEDISと差異あり", r => r.medisDiff],
+    ["medisOnly", "MEDISのみ", r => r.medisOnly],
+  ];
+
+  function buildChips() {
+    const flags = FLAGS.filter(([id]) => (id !== "medis" && id !== "medisOnly") || (D.medis && D.medis.snapshot));
+    const ks = new Map();
+    rows.forEach(r => r.a[5].split("/").filter(k => k && k !== "MEDIS").forEach(k => ks.set(k, (ks.get(k) || 0) + 1)));
+    const order = [...ks.keys()].sort();
+    $("#kubunChips").innerHTML = order.map(k => `<button class="chip" type="button" data-k="${esc(k)}" aria-pressed="false">区分${esc(k)} <span class="num">${ks.get(k).toLocaleString()}</span></button>`).join("");
+    $("#flagChips").innerHTML = flags.map(([id, label]) => `<button class="chip" type="button" data-f="${id}" aria-pressed="false">${label}</button>`).join("");
+    $("#kubunChips").addEventListener("click", e => {
+      const b = e.target.closest("button"); if (!b) return;
+      const k = b.dataset.k; kubunSel.has(k) ? kubunSel.delete(k) : kubunSel.add(k);
+      b.setAttribute("aria-pressed", kubunSel.has(k)); shown = 200; renderList();
+    });
+    $("#flagChips").addEventListener("click", e => {
+      const b = e.target.closest("button"); if (!b) return;
+      const f = b.dataset.f; flagSel.has(f) ? flagSel.delete(f) : flagSel.add(f);
+      b.setAttribute("aria-pressed", flagSel.has(f)); shown = 200; renderList();
+    });
+  }
+
+  function filtered() {
+    const q = norm($("#q").value);
+    const isCode = /^\d{3}$/.test(q);
+    return rows.filter(r => {
+      if (kubunSel.size && !r.a[5].split("/").some(k => kubunSel.has(k))) return false;
+      for (const [id, , fn] of FLAGS) if (flagSel.has(id) && !fn(r)) return false;
+      if (!q) return true;
+      if (isCode) return r.a[7].some(c => (c.category || "").normalize("NFKC").startsWith(q));
+      return r.hay.includes(q) || (q.length >= 6 && /^\d+$/.test(q) && r.jans.includes(q));
+    });
+  }
+
+  function renderList() {
+    const f = filtered();
+    $("#count").textContent = `${f.length.toLocaleString()} 件の承認番号`;
+    const list = $("#list");
+    if (!f.length) { list.innerHTML = `<div class="empty">該当する承認番号がありません。<br>B・C区分（特定保険医療材料）として通知に掲載されたものが対象です。</div>`; return; }
+    list.innerHTML = f.slice(0, shown).map(r => {
+      const a = r.a;
+      return `<button class="item" type="button" role="listitem" data-no="${esc(a[0])}" aria-current="${current === a[0]}">
+        <span class="no">${esc(a[0])}</span><span class="kb">${esc(a[3])}・区分${esc(a[5])}</span>
+        <span class="nm">${esc(a[1]) || "（販売名なし）"}</span><span class="ap">${esc(a[2])}</span></button>`;
+    }).join("") + (f.length > shown ? `<div class="more"><button type="button" id="moreBtn">さらに表示（残り ${(f.length - shown).toLocaleString()} 件）</button></div>` : "");
+    const mb = $("#moreBtn"); if (mb) mb.onclick = () => { shown += 300; renderList(); };
+  }
+
+  function evRow(e, withNo) {
+    // e: [date, type, title, detail, kubun, code, before, after, doc]
+    const doc = e[8] && D.docs[e[8]];
+    const price = (e[6] != null || e[7] != null) && (e[1] === "price_revision" || e[1] === "notice_price_diff")
+      ? `<div class="price">${yen(e[6])} → <b>${yen(e[7])}</b>${e[6] ? ` <span class="sub2" style="display:inline">（${(e[7] - e[6] >= 0 ? "+" : "") + ((e[7] - e[6]) / e[6] * 100).toFixed(1)}%）</span>` : ""}</div>` : "";
+    const src = doc ? `<div class="src">出典: <a href="${esc(doc[1])}" target="_blank" rel="noopener">${esc(doc[0].replace(/［.*?］|（PDF：.*?）/g, ""))}</a></div>`
+      : e[1] === "price_revision" || e[1] === "category_abolished" || e[1] === "category_renamed" ? `<div class="src">出典: 特定器材マスター（コード <span class="mono">${esc(e[5])}</span>）</div>` : "";
+    return `<li class="ev-${esc(e[1])}"><div class="d">${esc(e[0])}</div><div class="rail"><span class="dot"></span></div>
+      <div class="body"><div class="t">${esc(e[2])}</div>${e[3] ? `<div class="x">${esc(e[3])}</div>` : ""}${price}${src}</div></li>`;
+  }
+
+  function renderApproval(no) {
+    current = no;
+    document.querySelectorAll(".item").forEach(b => b.setAttribute("aria-current", b.dataset.no === no));
+    const r = rows.find(x => x.a[0] === no); if (!r) return;
+    const a = r.a, evs = D.events[no] || [], prods = D.products[no] || [];
+    const curRows = a[7].map(c => {
+      const st = c.abolished ? `<span class="pill bad">${esc(c.abolished)} 廃止</span>` : c.code ? "" : `<span class="pill warn">マスター未対応</span>`;
+      const diff = c.price_now != null && c.price_listed != null && Math.abs(c.price_now - c.price_listed) >= 0.5
+        ? `<span class="sub2">掲載時 ${yen(c.price_listed)}</span>` : "";
+      return `<tr><td><span class="pill k">${esc(c.kubun || "")}</span></td>
+        <td>${esc(c.master_name || c.category)}${c.master_name && c.master_name !== c.category ? `<span class="sub2">通知表記: ${esc(c.category)}</span>` : ""}</td>
+        <td class="mono">${esc(c.code || "—")}</td><td class="r mono">${c.unit ? esc(c.unit) + " " : ""}${yen(c.price_now ?? c.price_listed)}${diff}</td>
+        <td class="mono">${esc(c.since || "")}</td><td class="r num">${c.n_products ? c.n_products.toLocaleString() : "—"}</td><td>${st}</td></tr>`;
+    }).join("");
+    const m = D.medis && D.medis.by_approval && D.medis.by_approval[no];
+    const medisHtml = m ? renderMedis(m) : "";
+    const PROD_LIMIT = 12;
+    const prodRows = prods.map((p, i) => `<tr${i >= PROD_LIMIT ? ' class="more-prod" hidden' : ""}><td class="mono">${esc(p[0])}</td><td>${esc(p[1])}</td><td class="mono">${esc(p[2])}</td><td class="mono">${esc(p[3])}</td></tr>`).join("");
+    $("#ledger").innerHTML = `
+      <article class="sheet">
+        <div class="eyebrow">承認番号・認証番号</div>
+        <h2 class="appr">${esc(a[0])}</h2>
+        <div class="sales">${esc(a[1])}</div>
+        <div class="meta"><span>${r.medisOnly ? "製造販売業者" : "保険適用希望者"} <b>${esc(a[2])}</b></span>${a[3] ? `<span>初回適用 <b class="mono">${esc(a[3])}</b></span>` : ""}
+          <span>区分 <b>${esc(a[5])}</b></span><span>製品 <b class="num">${a[6].toLocaleString()}</b> 件</span></div>
+      </article>
+      <article class="sheet">
+        <h3>現在の機能区分 <small>${r.medisOnly ? "MEDIS登録内容" : "価格は特定器材マスターの現行値"}</small></h3>
+        <div class="tbl-wrap"><table><thead><tr><th>区分</th><th>機能区分</th><th>特定器材コード</th><th class="r">償還価格</th><th>初掲載</th><th class="r">製品数</th><th>状態</th></tr></thead>
+        <tbody>${curRows}</tbody></table></div>
+      </article>
+      ${medisHtml}
+      <article class="sheet">
+        <h3>変更の時系列 <small>${evs.length} 件</small></h3>
+        ${r.medisOnly ? `<p class="note">この承認番号は解析範囲の通知（平成28年度後半以降）にB・C区分での掲載がありません。上の機能区分はMEDISの登録内容です。</p>` : ""}
+        <div class="legend">${Object.entries({ listing_new: "保険適用", category_changed: "機能区分の変更・追加", products_added: "製品追加", price_revision: "価格改定", category_abolished: "廃止", correction: "訂正" }).map(([k, v]) => `<span class="ev-${k}"><i></i>${v}</span>`).join("")}</div>
+        <ol class="timeline">${evs.map(e => evRow([e[0], e[1], e[2], e[3], e[4], e[5], e[6], e[7], e[8]])).join("")}</ol>
+      </article>
+      <article class="sheet">
+        <h3>製品（製品コード） <small>${prods.length.toLocaleString()} 件・初掲載順</small></h3>
+        <div class="tbl-wrap"><table><thead><tr><th>製品コード</th><th>製品名</th><th>初掲載</th><th>区分番号</th></tr></thead><tbody>${prodRows}</tbody></table></div>
+        ${prods.length > PROD_LIMIT ? `<p><button class="toggle" type="button" id="prodToggle">すべて表示（${prods.length.toLocaleString()} 件）</button></p>` : ""}
+      </article>`;
+    const pt = $("#prodToggle");
+    if (pt) pt.onclick = () => { document.querySelectorAll(".more-prod").forEach(tr => tr.hidden = false); pt.remove(); };
+    try { history.replaceState(null, "", "#" + no); } catch (e) {}
+    if (window.matchMedia("(max-width: 860px)").matches) $("#ledger").scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  function renderMedis(m) {
+    const rows = m.codes.map(c => `<tr><td class="mono">${esc(c.code || "—")}</td><td>${esc(c.name)}</td><td class="r mono">${yen(c.price)}</td><td class="mono">${esc(c.notice_date || "")}</td><td class="r num">${c.n_jan}</td></tr>`).join("");
+    const notes = [];
+    if (m.not_in_notice.length) notes.push(`<p><span class="pill warn">要確認</span> 解析範囲の通知（平成28年度後半以降）に掲載のない特定器材コードがMEDISにあります: ${m.not_in_notice.map(c => `<span class="mono">${esc(c.code)}</span> ${esc(c.name)}`).join("、")}。それ以前の掲載、改定時の区分移行、MEDIS側の登録内容のいずれかが考えられます。</p>`);
+    if (m.added.length) notes.push(`<p>前回スナップショット（${esc(D.medis.prev_snapshot)}）から追加: ${m.added.map(c => esc(c.name)).join("、")}</p>`);
+    if (m.removed.length) notes.push(`<p>前回から消えた区分: ${m.removed.map(c => esc(c.name)).join("、")}</p>`);
+    if (m.price_changed.length) notes.push(`<p>前回から価格変更: ${m.price_changed.map(c => `${esc(c.name)} ${yen(c.before)} → ${yen(c.after)}`).join("、")}</p>`);
+    return `<article class="sheet medis"><h3>MEDIS 医療機器データベース <small>${esc(D.medis.snapshot)} 時点・JAN ${m.n_jan.toLocaleString()} 件</small></h3>
+      <div class="note">${notes.join("") || "<p>通知の掲載内容と矛盾はありません。</p>"}</div>
+      <div class="tbl-wrap"><table><thead><tr><th>医事コード</th><th>特定保険医療材料名称</th><th class="r">償還価格</th><th>告示日</th><th class="r">JAN数</th></tr></thead><tbody>${rows}</tbody></table></div></article>`;
+  }
+
+  function renderHome() {
+    current = null;
+    const all = [];
+    for (const [no, evs] of Object.entries(D.events)) for (const e of evs) all.push([no, e]);
+    const types = new Set(["listing_new", "category_changed", "category_added", "category_abolished", "correction"]);
+    const recent = all.filter(x => types.has(x[1][1])).sort((x, y) => y[1][0].localeCompare(x[1][0])).slice(0, 60);
+    const name = Object.fromEntries(D.approvals.map(a => [a[0], a[1]]));
+    $("#ledger").innerHTML = `
+      <article class="sheet">
+        <h3>直近の変更 <small>保険適用・機能区分の変更と追加・廃止・訂正（新しい順 60 件）</small></h3>
+        <div class="feed">${recent.map(([no, e]) => `<div class="row ev-${esc(e[1])}"><span class="mono" style="color:var(--ink-2);font-size:12.5px">${esc(e[0])}</span>
+          <div><button type="button" data-no="${esc(no)}">${esc(no)}</button> ${esc(name[no] || "")}<br><b style="color:var(--c)">${esc(e[2])}</b> <span class="x" style="color:var(--ink-2);font-size:13px">${esc((e[3] || "").slice(0, 120))}</span></div></div>`).join("")}</div>
+      </article>
+      <article class="sheet note">
+        <h3>このデータについて</h3>
+        <p>厚生労働省「医療機器の保険適用について」（毎月の保医発通知、一部訂正・差替を含む）のうち、B・C区分（特定保険医療材料）として掲載された行を承認番号ごとにまとめています。償還価格の改定・機能区分の廃止は、支払基金（現・医療情報基盤・診療報酬審査支払機構）の特定器材マスター全版と照合して表示しています。</p>
+        <p>平成27年度以前の通知はスキャン画像のため現在は対象外です。A1（包括）・A2（特定包括）は含みません。機能区分とマスターの対応は名称の類似度と価格で自動判定しているため、「マスター未対応」の行は通知の表記をそのまま表示しています。最終的な確認は出典の通知PDFで行ってください。</p>
+      </article>`;
+    $("#ledger").querySelectorAll(".feed button").forEach(b => b.onclick = () => renderApproval(b.dataset.no));
+  }
+
+  function coverage() {
+    const s = D.notice_stats || {};
+    const nM = D.approvals.filter(a => (a[8] || "").includes("MEDISのみ")).length;
+    $("#coverage").innerHTML = `<span>承認番号 <b class="num">${(D.approvals.length - nM).toLocaleString()}</b>${nM ? `（MEDISのみ <b class="num">${nM.toLocaleString()}</b>）` : ""}</span>
+      <span>掲載期間 <b class="mono">${esc(D.span[0] || "")}</b> 〜 <b class="mono">${esc(D.span[1] || "")}</b></span>
+      <span>通知 解析済 <b class="num">${(s["解析済"] || 0)}</b>・スキャン未対応 <b class="num">${(s["スキャン画像（未対応）"] || 0)}</b></span>
+      <span>更新 <b class="mono">${esc((D.built_at || "").slice(0, 10))}</b></span>`;
+  }
+
+  load().then(d => {
+    D = d; index(); coverage(); buildChips(); renderList();
+    const h = decodeURIComponent(location.hash.slice(1));
+    if (h && D.events[h]) renderApproval(h); else renderHome();
+    let t; $("#q").addEventListener("input", () => { clearTimeout(t); t = setTimeout(() => { shown = 200; renderList(); }, 120); });
+    $("#list").addEventListener("click", e => { const b = e.target.closest(".item"); if (b) renderApproval(b.dataset.no); });
+  }).catch(err => { $("#ledger").innerHTML = `<div class="sheet">${esc(err.message)}</div>`; });
+})();
+</script>
