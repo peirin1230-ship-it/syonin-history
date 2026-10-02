@@ -1,5 +1,14 @@
 # syonin-history — 医療機器 承認番号別 償還区分履歴トラッカー
 
+**▶ ビューアを開く: https://peirin1230-ship-it.github.io/syonin-history/**
+
+ブラウザで開くだけで、通知ごとの変更点・承認番号ごとの履歴・レセ電コード（特定器材コード）の履歴を検索・閲覧できます。
+毎月1日 9:00（日本時間）の自動更新で `docs/index.html` が更新されると、数分後にこのページにも反映されます。
+（公的な通知と特定器材マスターから作った版です。MEDIS の突き合わせは含みません）
+
+- 承認番号を直接開く: `https://peirin1230-ship-it.github.io/syonin-history/#30400BZX00034000`
+- レセ電コードを直接開く: `https://peirin1230-ship-it.github.io/syonin-history/#c-710010693`
+
 医療機器の **承認番号（認証番号）ごと** に、特定保険医療材料（**B・C区分**）としての
 
 - いつ保険適用になったか（区分 B1 / B2 / C1 / C2 / R など）
@@ -57,7 +66,7 @@ python -m mdtrack show 30400BZX00034000   # ターミナルで履歴を表示
 | ファイル | 内容 |
 |---|---|
 | `output/viewer.html` | 検索・時系列表示のビューア（ブラウザで開くだけ）。MEDIS を取り込んでいれば突き合わせ結果も表示。**ローカル用** |
-| `docs/index.html` | 同じビューアの公的情報のみ版（共有・GitHub Pages 用） |
+| `docs/index.html` | 同じビューアの公的情報のみ版。GitHub Pages（main ブランチの `/docs`）で上記URLに公開 |
 | `output/syonin_history.xlsx` | 通知ごとの変更点／承認番号一覧／変更イベント／掲載明細／レセ電コードの履歴／レセ電コードのマスター履歴／通知一覧 |
 | `data/syonin.sqlite` | すべてのデータ（SQLite） |
 
