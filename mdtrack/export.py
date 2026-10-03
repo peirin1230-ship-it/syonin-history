@@ -183,6 +183,21 @@ def _xl(v):
     return _ILLEGAL.sub("", v) if isinstance(v, str) else v
 
 
+def _highlight(ws, col: int) -> None:
+    """機能区分の変更・追加の行に色を付ける（算定に直結するため目立たせる）。col は種類が入る列（1始まり）。"""
+    from openpyxl.styles import Font, PatternFill
+    chg = PatternFill("solid", fgColor="FFE3D3")
+    add = PatternFill("solid", fgColor="D9F0EA")
+    bold = Font(bold=True)
+    for row in ws.iter_rows(min_row=2):
+        v = row[col - 1].value or ""
+        fill = chg if "機能区分の変更" in v else add if "機能区分の追加" in v else None
+        if fill:
+            for c in row:
+                c.fill = fill
+            row[col - 1].font = bold
+
+
 def write_excel(p: Paths, path: Path, with_listing: bool = True) -> None:
     from openpyxl import Workbook
     from openpyxl.styles import Alignment, Font, PatternFill
@@ -221,8 +236,9 @@ def write_excel(p: Paths, path: Path, with_listing: bool = True) -> None:
     ev = con.execute("SELECT e.approval_no, a.sales_name, e.date, e.title, e.detail, e.kubun, e.category_code, "
                      "e.price_before, e.price_after, e.source, e.doc_id FROM events e "
                      "LEFT JOIN approvals a USING(approval_no) ORDER BY e.date DESC, e.approval_no").fetchall()
-    sheet("変更イベント", ["承認番号", "販売名", "日付", "種別", "内容", "区分", "特定器材コード", "変更前(円)",
-                      "変更後(円)", "出典", "通知ID"], ev, [19, 30, 11, 22, 70, 7, 12, 11, 11, 10, 14])
+    ws_ev = sheet("変更イベント", ["承認番号", "販売名", "日付", "種別", "内容", "区分", "特定器材コード", "変更前(円)",
+                              "変更後(円)", "出典", "通知ID"], ev, [19, 30, 11, 22, 70, 7, 12, 11, 11, 10, 14])
+    _highlight(ws_ev, 4)
     li = [] if not with_listing else con.execute("SELECT l.effective_date, l.approval_no, l.sales_name, l.product_name, l.product_code, "
                      "l.applicant, l.setting, l.kubun, CASE l.action WHEN 'new' THEN '新規' WHEN 'add' THEN "
                      "'追加・変更' ELSE l.action END, l.category, l.category_code, l.price_unit, l.price, n.title, "
@@ -262,9 +278,10 @@ def write_excel(p: Paths, path: Path, with_listing: bool = True) -> None:
         bc = sorted({x[1] for x in d.get("before", []) if isinstance(x, list) and x[1]})
         ac = sorted({x[1] for x in d.get("after", []) if isinstance(x, list) and x[1]})
         ncs.append(tuple(r[:8]) + (" ".join(bc), " ".join(ac)) + tuple(r[8:10]))
-    sheet("通知ごとの変更点", ["適用開始日", "通知日", "承認番号", "販売名", "保険適用希望者", "区分", "変更の種類",
-                         "内容", "この通知の前のレセ電コード", "この通知で掲載のレセ電コード", "読取", "通知"], ncs,
-          [11, 11, 19, 30, 24, 7, 22, 80, 22, 22, 6, 50])
+    ws_nc = sheet("通知ごとの変更点", ["適用開始日", "通知日", "承認番号", "販売名", "保険適用希望者", "区分", "変更の種類",
+                                 "内容", "この通知の前のレセ電コード", "この通知で掲載のレセ電コード", "読取", "通知"], ncs,
+                  [11, 11, 19, 30, 24, 7, 22, 80, 22, 22, 6, 50])
+    _highlight(ws_nc, 7)
     nt = con.execute("SELECT notice_date, effective_date, CASE kind WHEN 'notice' THEN '通知' WHEN 'correction' "
                      "THEN '訂正' WHEN 'replacement' THEN '差替' ELSE kind END, title, status, n_rows, url "
                      "FROM notices ORDER BY notice_date DESC").fetchall()

@@ -25,6 +25,10 @@
   --warn-fg: #8a5300;
   --bad-bg: #fbe9e9;
   --bad-fg: #9b2c2c;
+  /* 機能区分の変更・追加（算定に直結するので最も目立たせる） */
+  --fx-chg: #c2410c; --fx-chg-bg: #fff1e8;
+  --fx-add: #0f766e; --fx-add-bg: #e6f4f1;
+  --fx-on: #ffffff;
   --f-display: "Zen Kaku Gothic New", "Hiragino Kaku Gothic ProN", "Yu Gothic", sans-serif;
   --f-body: "BIZ UDPGothic", "Hiragino Kaku Gothic ProN", "Yu Gothic", "Meiryo", sans-serif;
   --f-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
@@ -36,6 +40,7 @@
     --rule: #2c3442; --rule-2: #232a35; --ai: #8fb0e6; --ai-soft: #233149;
     --ev-new: #8fb0e6; --ev-cat: #5cc2b0; --ev-prod: #98a3b5; --ev-price: #e0a548; --ev-abol: #ef8080; --ev-corr: #b996dd;
     --warn-bg: #3a2c14; --warn-fg: #f2c27a; --bad-bg: #3a1f22; --bad-fg: #f3a3a3;
+    --fx-chg: #fb923c; --fx-chg-bg: #35241a; --fx-add: #5eead4; --fx-add-bg: #14302c; --fx-on: #12161d;
     color-scheme: dark;
   }
 }
@@ -44,6 +49,7 @@
   --rule: #2c3442; --rule-2: #232a35; --ai: #8fb0e6; --ai-soft: #233149;
   --ev-new: #8fb0e6; --ev-cat: #5cc2b0; --ev-prod: #98a3b5; --ev-price: #e0a548; --ev-abol: #ef8080; --ev-corr: #b996dd;
   --warn-bg: #3a2c14; --warn-fg: #f2c27a; --bad-bg: #3a1f22; --bad-fg: #f3a3a3;
+  --fx-chg: #fb923c; --fx-chg-bg: #35241a; --fx-add: #5eead4; --fx-add-bg: #14302c; --fx-on: #12161d;
   color-scheme: dark;
 }
 * { box-sizing: border-box; }
@@ -149,11 +155,16 @@ td.r, th.r { text-align: right; }
   .tbl-wrap table { min-width: 620px; }
 }
 .ev-listing_new { --c: var(--ev-new); }
-.ev-category_added, .ev-category_changed { --c: var(--ev-cat); }
+.ev-category_changed { --c: var(--fx-chg); }
+.ev-category_added { --c: var(--fx-add); }
+.timeline li.ev-category_changed .body, .timeline li.ev-category_added .body {
+  background: var(--fx-chg-bg); border-radius: 6px; padding: 7px 10px 10px; margin: 3px 0 9px; }
+.timeline li.ev-category_added .body { background: var(--fx-add-bg); }
+.timeline li.ev-category_changed .dot, .timeline li.ev-category_added .dot { background: var(--c); }
 .ev-products_added { --c: var(--ev-prod); }
 .ev-notice_price_diff, .ev-price_revision { --c: var(--ev-price); }
 .ev-category_abolished { --c: var(--ev-abol); }
-.ev-category_renamed { --c: var(--ev-cat); }
+.ev-category_renamed { --c: var(--ev-prod); }
 .ev-correction { --c: var(--ev-corr); }
 .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--ink-3); margin-bottom: 10px; }
 .legend i { display: inline-block; width: 9px; height: 9px; border-radius: 50%; border: 2.5px solid var(--c); margin-right: 5px; vertical-align: -1px; }
@@ -186,9 +197,10 @@ td.r, th.r { text-align: right; }
 .tb { display: inline-block; font-size: 11px; line-height: 18px; padding: 0 6px; border-radius: 4px; white-space: nowrap;
   background: var(--rule-2); color: var(--ink-2); }
 .tb.t-新規 { background: var(--ai-soft); color: var(--ai); }
-.tb.t-区分変更 { background: var(--bad-bg); color: var(--bad-fg); font-weight: 700; }
-.tb.t-機能区分の変更 { background: var(--ev-cat); color: var(--sheet); font-weight: 700; }
-.tb.t-機能区分の追加 { color: var(--ev-cat); box-shadow: inset 0 0 0 1px var(--ev-cat); background: transparent; }
+.tb.t-区分変更 { background: transparent; color: var(--bad-fg); box-shadow: inset 0 0 0 1px currentColor; }
+.tb.t-機能区分の変更, .tb.t-機能区分の追加 { color: var(--fx-on); font-weight: 700; font-size: 12px; line-height: 20px; padding: 0 8px; }
+.tb.t-機能区分の変更 { background: var(--fx-chg); }
+.tb.t-機能区分の追加 { background: var(--fx-add); }
 .tb.t-価格差 { background: var(--warn-bg); color: var(--warn-fg); }
 .tb.t-変更なし { background: transparent; color: var(--ink-3); box-shadow: inset 0 0 0 1px var(--rule); }
 .tb.t-訂正 { color: var(--ev-corr); box-shadow: inset 0 0 0 1px var(--ev-corr); background: transparent; }
@@ -197,6 +209,13 @@ td.r, th.r { text-align: right; }
 .tile b { display: block; font-size: 20px; font-family: var(--f-mono); font-weight: 500; color: var(--ink); }
 .tile span { font-size: 12px; color: var(--ink-2); }
 .tile[aria-pressed="true"] { border-color: var(--ai); box-shadow: inset 0 0 0 1px var(--ai); }
+.tile.t-機能区分の変更 { border: 2px solid var(--fx-chg); background: var(--fx-chg-bg); }
+.tile.t-機能区分の追加 { border: 2px solid var(--fx-add); background: var(--fx-add-bg); }
+.tile.t-機能区分の変更 b { color: var(--fx-chg); font-weight: 700; }
+.tile.t-機能区分の追加 b { color: var(--fx-add); font-weight: 700; }
+.tile.t-機能区分の変更 span, .tile.t-機能区分の追加 span { color: var(--ink); font-weight: 700; }
+.tile.t-機能区分の変更[aria-pressed="true"] { box-shadow: inset 0 0 0 2px var(--fx-chg); }
+.tile.t-機能区分の追加[aria-pressed="true"] { box-shadow: inset 0 0 0 2px var(--fx-add); }
 .ncrow { display: grid; grid-template-columns: minmax(150px, 210px) minmax(0, 1fr); gap: 4px 16px; padding: 10px 0; border-bottom: 1px solid var(--rule-2); }
 @media (max-width: 640px) { .ncrow { grid-template-columns: minmax(0, 1fr); } }
 .ncrow .who button { all: unset; cursor: pointer; font-family: var(--f-mono); color: var(--ai); font-size: 13px; }
@@ -206,13 +225,17 @@ td.r, th.r { text-align: right; }
 .ncrow .what { min-width: 0; }
 .ncrow .what .bs { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 3px; }
 .ncrow .what .sm { font-size: 13px; color: var(--ink-2); overflow-wrap: anywhere; }
+.ncrow.hl-chg, .ncrow.hl-add { padding: 12px 12px 12px 16px; margin: 6px 0; border-radius: 6px; border-bottom: 0; }
+.ncrow.hl-chg { background: var(--fx-chg-bg); box-shadow: inset 4px 0 0 var(--fx-chg); }
+.ncrow.hl-add { background: var(--fx-add-bg); box-shadow: inset 4px 0 0 var(--fx-add); }
+.ncrow.hl-chg .what .sm, .ncrow.hl-add .what .sm { color: var(--ink); }
 .ncrow details { margin-top: 4px; font-size: 12.5px; }
 .ncrow details summary { cursor: pointer; color: var(--ai); }
 .ba { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px 16px; margin-top: 6px; }
 @media (max-width: 640px) { .ba { grid-template-columns: minmax(0, 1fr); } }
 .ba h4 { margin: 0 0 2px; font-size: 11.5px; color: var(--ink-3); letter-spacing: .06em; }
 .ba ul { margin: 0; padding-left: 1.1em; }
-.ba li.new { color: var(--ev-cat); font-weight: 700; }
+.ba li.new { color: var(--fx-add); font-weight: 700; }
 .ba li.gone { color: var(--ink-3); text-decoration: line-through; }
 .nsearch { width: 100%; max-width: 360px; padding: 7px 10px; border: 1px solid var(--rule); border-radius: var(--r); background: var(--sheet); }
 .goto { border: 0; background: none; color: var(--ai); cursor: pointer; padding: 0; font-size: 12px; text-decoration: underline; }
@@ -475,7 +498,7 @@ details.ph li.out { color: var(--ink-3); }
       <article class="sheet">
         <h3>変更の時系列 <small>${evs.length} 件</small></h3>
         ${r.medisOnly ? `<p class="note">この承認番号は解析範囲の通知（平成28年度後半以降）にB・C区分での掲載がありません。上の機能区分はMEDISの登録内容です。</p>` : ""}
-        <div class="legend">${Object.entries({ listing_new: "保険適用", category_changed: "機能区分の変更・追加", products_added: "製品追加", price_revision: "価格改定", category_abolished: "廃止", correction: "訂正" }).map(([k, v]) => `<span class="ev-${k}"><i></i>${v}</span>`).join("")}</div>
+        <div class="legend">${Object.entries({ listing_new: "保険適用", category_changed: "機能区分の変更", category_added: "機能区分の追加", products_added: "製品追加", price_revision: "価格改定", category_abolished: "廃止", correction: "訂正" }).map(([k, v]) => `<span class="ev-${k}"><i></i>${v}</span>`).join("")}</div>
         <ol class="timeline">${evs.map(e => evRow([e[0], e[1], e[2], e[3], e[4], e[5], e[6], e[7], e[8], e[9]])).join("")}</ol>
       </article>
       <article class="sheet">
@@ -712,7 +735,7 @@ details.ph li.out { color: var(--ink-3); }
 
 
   // ---------------- 通知ごとの変更点 ----------------
-  const TYPES = ["区分変更", "機能区分の変更", "機能区分の追加", "価格差", "新規", "製品名変更", "販売名変更", "製品追加", "変更なし"];
+  const TYPES = ["機能区分の変更", "機能区分の追加", "区分変更", "価格差", "新規", "製品名変更", "販売名変更", "製品追加", "変更なし"];
   const TYPE_NOTE = {
     "新規": "この通知で初めてB・C区分に掲載された承認番号",
     "区分変更": "以前と異なる保険適用区分（例: B1→C1、B1→B2）で掲載（製品追加を伴う掲載は「製品追加」のみ）",
@@ -728,7 +751,7 @@ details.ph li.out { color: var(--ink-3); }
   const PRIO = t => { const i = TYPES.indexOf(t); return i < 0 ? 99 : i; };
 
   function typeBadges(types) {
-    return types.map(t => `<span class="tb t-${esc(t)}">${esc(t)}</span>`).join("");
+    return types.slice().sort((a, b) => PRIO(a) - PRIO(b)).map(t => `<span class="tb t-${esc(t)}">${esc(t)}</span>`).join("");
   }
 
   function renderNoticeList() {
@@ -738,7 +761,7 @@ details.ph li.out { color: var(--ink-3); }
       const y = (n[2] || n[1] || "").slice(0, 4);
       if (y !== year) { html += `<div class="ygroup">${esc(y)}年</div>`; year = y; }
       const c = n[7] || {};
-      const keys = ["区分変更", "機能区分の変更", "機能区分の追加", "新規"].filter(k => c[k]);
+      const keys = ["機能区分の変更", "機能区分の追加", "区分変更", "新規"].filter(k => c[k]);
       const kind = n[3] === "replacement" ? "通知（別紙差替後）" : n[6].startsWith("OCR") ? "通知・OCR" : !n[5] ? "通知・手元PDF" : "通知";
       html += `<button class="nitem" type="button" role="listitem" data-doc="${esc(n[0])}" aria-current="${curDoc === n[0]}">
         <span class="nd">${esc(n[2])} 適用</span><span class="nk">${esc(kind)}・${n[8]}件</span>
@@ -765,7 +788,7 @@ details.ph li.out { color: var(--ink-3); }
       if (q && !norm(r[0] + r[1] + r[2]).includes(q)) return false;
       return true;
     }).sort((a, b) => Math.min(...a[5].split(",").map(PRIO)) - Math.min(...b[5].split(",").map(PRIO)) || a[0].localeCompare(b[0]));
-    const tiles = TYPES.filter(t => c[t]).map(t => `<button class="tile" type="button" data-t="${esc(t)}" aria-pressed="${typeSel.has(t)}" title="${esc(TYPE_NOTE[t])}"><b>${c[t]}</b><span>${esc(t)}</span></button>`).join("")
+    const tiles = TYPES.filter(t => c[t]).map(t => `<button class="tile t-${esc(t)}" type="button" data-t="${esc(t)}" aria-pressed="${typeSel.has(t)}" title="${esc(TYPE_NOTE[t])}"><b>${c[t]}</b><span>${esc(t)}</span></button>`).join("")
       + (corr.length ? `<button class="tile" type="button" data-t="訂正" aria-pressed="${typeSel.has("訂正")}" title="この通知に対する一部訂正で直された承認番号"><b>${corrAppr.size}</b><span>あとで訂正</span></button>` : "");
     const rowsHtml = rowsF.map(r => {
       const types = r[5].split(",");
@@ -774,11 +797,12 @@ details.ph li.out { color: var(--ink-3); }
       const before = new Set(r[7].map(K)), after = new Set(r[8].map(K));
       const moves = r[9] || [];
       const gone = x => moves.some(m => (Array.isArray(x) && x[1] && m.code_from) ? m.code_from === x[1] : m.from === (Array.isArray(x) ? x[0] : x));
+      const hl = types.includes("機能区分の変更") ? "hl-chg" : types.includes("機能区分の追加") ? "hl-add" : "";
       const detail = (types.includes("新規") ? (r[8].some(x => Array.isArray(x) && x[1]) ? `<div class="sub2" style="margin-top:3px">レセ電コード: ${[...new Set(r[8].map(x => x[1]).filter(Boolean))].map(clink).join("、")}</div>` : "")
-        : `<details><summary>変更前と変更後の機能区分・レセ電コード</summary><div class="ba">
+        : `<details${hl ? " open" : ""}><summary>変更前と変更後の機能区分・レセ電コード</summary><div class="ba">
           <div><h4>この通知の前</h4><ul>${r[7].map(x => `<li class="${after.has(K(x)) ? "" : (gone(x) ? "gone" : "")}">${L(x)}</li>`).join("") || "<li>—</li>"}</ul></div>
           <div><h4>この通知での掲載</h4><ul>${r[8].map(x => `<li class="${before.has(K(x)) ? "" : "new"}">${L(x)}</li>`).join("") || "<li>—</li>"}</ul></div></div></details>`);
-      return `<div class="ncrow"><div class="who"><button type="button" data-no="${esc(r[0])}">${esc(r[0])}</button>
+      return `<div class="ncrow ${hl}"><div class="who"><button type="button" data-no="${esc(r[0])}">${esc(r[0])}</button>
           <div class="sn">${esc(r[1])}</div><div class="ap">${esc(r[2])}・区分${esc(r[3])}・製品${r[10]}件</div></div>
         <div class="what"><div class="bs">${typeBadges(types)}${corrAppr.has(r[0]) ? `<span class="tb t-訂正">あとで訂正</span>` : ""}</div>
           <div class="sm">${esc(r[6])}</div>${detail}</div></div>`;
