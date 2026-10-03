@@ -6,6 +6,7 @@
   build             SQLite データベースを構築
   add-pdf FILE      厚生局にまだ載っていない通知を手元のPDFから取り込む（取込後に build・export）
   medis FILE        MEDISダウンロードファイル（.lzh / .txt）を取り込む
+  receden-check DB  receden-history の履歴DB（masters.sqlite）と特定器材の履歴を突き合わせる（検証用）
   ocr [--force]     スキャン画像の通知（平成20〜28年度）を OCR（要 tesseract・jpn 学習データ、数時間）
   ocr-fix           OCR 結果の承認番号・製品コードを既知の番号と照合して補正
   export            Excel・HTMLビューア・JSONを出力
@@ -40,6 +41,8 @@ def main(argv=None) -> int:
     so.add_argument("--workers", type=int, default=2)
     sub.add_parser("ocr-fix")
     sub.add_parser("export")
+    sr = sub.add_parser("receden-check")
+    sr.add_argument("db", help="receden-history の data/db/masters.sqlite（receden build-history の結果）")
     ss = sub.add_parser("show")
     ss.add_argument("approval_no")
     a = ap.parse_args(argv)
@@ -68,6 +71,12 @@ def main(argv=None) -> int:
     if a.cmd in ("update", "export", "medis", "ocr", "ocr-fix", "add-pdf"):
         from . import export
         export.export_all(p)
+    if a.cmd == "receden-check":
+        from . import receden
+        out = p.out / "receden_check.csv"
+        for k, v in receden.compare(p.db, Path(a.db), out).items():
+            print(f"  {k}: {v:,}")
+        print(f"  食い違いの一覧 → {out}")
     if a.cmd == "show":
         from . import export
         export.print_history(p, a.approval_no)

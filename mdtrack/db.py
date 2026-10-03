@@ -6,7 +6,7 @@ import json
 import re
 import sqlite3
 import unicodedata
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import date, timedelta
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -39,7 +39,7 @@ CREATE INDEX ix_listing_code ON listing(product_code);
 CREATE TABLE corrections(correction_doc TEXT, correction_date TEXT, target_doc TEXT, target_date TEXT,
   approval_no TEXT, side TEXT, product_code TEXT, category TEXT, price REAL, matched INTEGER);
 CREATE TABLE ssk_history(code TEXT, valid_from TEXT, price REAL, unit TEXT, name TEXT, basic_name TEXT,
-  beppyo TEXT, kubun_no TEXT, abolish_date TEXT);
+  beppyo TEXT, kubun_no TEXT, abolish_date TEXT, abolish_source TEXT);
 CREATE INDEX ix_ssk_code ON ssk_history(code, valid_from);
 CREATE TABLE category_map(setting TEXT, category TEXT, code TEXT, beppyo TEXT, score REAL,
   PRIMARY KEY(setting, category));
@@ -224,6 +224,9 @@ class SskIndex:
 
     改定分ファイルは変更のあった項目だけが入っている（空欄 = 変更なし）ため、
     コードごとに適用日順・ファイル日付順に重ねて状態を復元する。
+
+    廃止年月日が記録されないまま全件ファイルから消えたコードは、消えた時期から廃止日を推定する
+    （receden-history と同じ考え方。abolish_source = "snapshot"）。
     """
 
     def __init__(self, rows: list[ssk.MasterRow]):
@@ -257,7 +260,53 @@ class SskIndex:
                     continue
                 collapsed.append((d, v))
             self.hist[code] = collapsed
+        self.abolish_source = {c: "master" for c, h in self.hist.items() if h[-1][1][6]}
+        self.removed: dict[str, tuple] = {}
+        self._infer_removed(rows)
         self._dates = {c: [d for d, _ in h] for c, h in self.hist.items()}
+
+    def _infer_removed(self, rows: list[ssk.MasterRow]) -> None:
+        """全件ファイル（t_ALL*）から消えたコードを廃止とみなす（廃止年月日の記録が無い場合だけ）。
+
+        最後に載っていた全件ファイルの次の全件ファイルに無く、その後の改定分ファイルにも出てこない
+        コードが対象。廃止の効力日は、消えた全件ファイルの中で多い変更年月日（改定の施行日。
+        例: 平成28年3月の全件ファイルなら 2016-04-01）とし、その前日を廃止日（最終日）とする。
+        """
+        snaps: dict[str, set] = defaultdict(set)
+        chg: dict[str, Counter] = defaultdict(Counter)
+        last_any: dict[str, str] = {}
+        for r in rows:
+            if not r.code or not r.file_date:
+                continue
+            if r.file_date > last_any.get(r.code, ""):
+                last_any[r.code] = r.file_date
+            if "ALL" in r.file.upper():
+                snaps[r.file_date].add(r.code)
+                if r.change_date and r.change_date.isdigit() and r.change_date != "00000000":
+                    chg[r.file_date][r.change_date] += 1
+        fds = sorted(snaps)
+        iso = lambda d: f"{d[:4]}-{d[4:6]}-{d[6:]}"  # noqa: E731
+        for code, h in self.hist.items():
+            if h[-1][1][6]:
+                continue
+            present = [fd for fd in fds if code in snaps[fd]]
+            if not present:
+                continue
+            later = [fd for fd in fds if fd > present[-1]]
+            if not later or last_any.get(code, "") > later[0]:
+                continue
+            first_abs = later[0]
+            hi = (date.fromisoformat(iso(first_abs)) + timedelta(days=62)).strftime("%Y%m%d")
+            lo = max(present[-1], h[-1][0].replace("-", ""))
+            cands = Counter({d: n for d, n in chg[first_abs].items() if lo < d <= hi})
+            eff = iso(cands.most_common(1)[0][0] if cands else first_abs)
+            if eff <= h[-1][0]:
+                continue
+            ab = (date.fromisoformat(eff) - timedelta(days=1)).isoformat()
+            v = h[-1][1]
+            h.append((eff, v[:6] + (ab,)))
+            self.abolish_source[code] = "snapshot"
+            self.removed[code] = (ab, present[-1], first_abs)
 
     def at(self, code: str, d: str):
         h = self.hist.get(code)
@@ -451,10 +500,12 @@ def build(db_path: Path, manifest: list[NoticeLink], parsed_dir: Path, ssk_dir: 
     mrows = ssk.parse_all(ssk_dir) if ssk_dir.exists() else []
     sidx = SskIndex(mrows)
     for code, h in sidx.hist.items():
-        con.executemany("INSERT INTO ssk_history VALUES (?,?,?,?,?,?,?,?,?)",
-                        [(code, d, v[0], v[1], v[2], v[3], v[4], v[5], v[6]) for d, v in h])
+        con.executemany("INSERT INTO ssk_history VALUES (?,?,?,?,?,?,?,?,?,?)",
+                        [(code, d, v[0], v[1], v[2], v[3], v[4], v[5], v[6],
+                          sidx.abolish_source.get(code, "") if v[6] else "") for d, v in h])
     matcher = catmap.CategoryMatcher(mrows)
-    log(f"  特定器材マスター {len(mrows):,}行 / コード {len(sidx.hist):,}件")
+    log(f"  特定器材マスター {len(mrows):,}行 / コード {len(sidx.hist):,}件"
+        f"（全件ファイルから消えた時期で廃止を推定 {len(sidx.removed):,}件）")
 
     # ---- 4. 掲載行（B/C区分）と機能区分の対応付け ---------------------------
     final = []
@@ -730,9 +781,15 @@ def make_events(con: sqlite3.Connection, final: list[dict], sidx: SskIndex, link
                 parts.append(f"区分{'/'.join(kub)}で保険適用（機能区分{len(cats)}・製品{len(new_codes)}件）")
             else:
                 newk = {k for k in kub_n if k not in seen_kubun and not k.endswith("?")}
+                # 製品追加を伴う掲載では区分変更としない（例: C1 で保険適用された機能区分に、後から製品を
+                # 追加するときは告示済みの B1 の区分で載る）。区分の違いは内容の文に補足として残す
+                kub_note = ""
                 if newk and seen_kubun:
-                    types.append("区分変更")
-                    parts.append(f"区分{'/'.join(sorted(kub_n))}で掲載（これまで {'/'.join(sorted(seen_kubun))}）")
+                    if new_codes:
+                        kub_note = f"（今回の掲載区分 {'/'.join(sorted(kub_n))}、これまで {'/'.join(sorted(seen_kubun))}）"
+                    else:
+                        types.append("区分変更")
+                        parts.append(f"区分{'/'.join(sorted(kub_n))}で掲載（これまで {'/'.join(sorted(seen_kubun))}）")
                 if moves_l:
                     types.append("機能区分の変更")
                     parts += [f"{m['from']}{_code_tag(m['code_from'])} → {m['to']}{_code_tag(m['code_to'])}（{m['n']}製品）"
@@ -742,7 +799,7 @@ def make_events(con: sqlite3.Connection, final: list[dict], sidx: SskIndex, link
                     parts += [f"追加: {a}" for a in added_l[:3]]
                 if new_codes:
                     types.append("製品追加")
-                    parts.append(f"製品 {len(new_codes)}件 追加")
+                    parts.append(f"製品 {len(new_codes)}件 追加{kub_note}")
                 if not is_ocr:
                     renamed = [(cd, prod_name[cd], x.get("product_name")) for cd in set(by_code) & known_codes
                                for x in [next(iter(by_code[cd].values()))]
@@ -819,9 +876,12 @@ def make_events(con: sqlite3.Connection, final: list[dict], sidx: SskIndex, link
                 prev = v
             if h and h[-1][1][6]:
                 ab = h[-1][1][6]
+                inferred = sidx.abolish_source.get(code) == "snapshot"
                 evs.append((appr, ab, "category_abolished",
-                            "機能区分の廃止" if ab <= today else "機能区分の廃止予定",
-                            f"{h[-1][1][3] or h[-1][1][2]}（{ab} まで）", c.get("setting"), c.get("kubun"),
+                            ("機能区分の廃止" if ab <= today else "機能区分の廃止予定") + ("（推定）" if inferred else ""),
+                            f"{h[-1][1][3] or h[-1][1][2]}（{ab} まで"
+                            + ("。廃止日はマスターに記録が無く、全件ファイルから消えた時期から推定" if inferred else "")
+                            + "）", c.get("setting"), c.get("kubun"),
                             c.get("category"), code, h[-1][1][0], None, None, "ssk"))
         cu_rows.extend(_code_usage_rows(appr, usage, move_log, cur_cats, sidx, owner, desig_by_appr.get(appr, ()),
                                         today))

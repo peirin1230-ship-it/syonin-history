@@ -113,3 +113,26 @@ def test_local_pdf_link():
     official = fetch.NoticeLink("000503000", "医療機器の保険適用について（令和8年10月1日から新たに適用）（令和8年9月30日）",
                                 "https://example/000503000.pdf", "notice", "2026-09-30", "2026-10-01", "令和8年度通知")
     assert fetch.same_notice_key(ln) == fetch.same_notice_key(official)
+
+
+def test_abolition_inferred_from_snapshots():
+    from mdtrack.db import SskIndex
+    from mdtrack.ssk import MasterRow
+
+    def row(f, fd, code, cd, price=100.0, ab="99999999"):
+        return MasterRow(f, fd, "0", code, "名称" + code, "", "1", price, cd, ab, "2", "001", "基本" + code)
+
+    rows = [
+        row("t_ALL20151228.zip", "20151228", "710010008", "20140401"),
+        row("t_ALL20151228.zip", "20151228", "710010001", "20140401"),
+        row("t_ALL20160304.csv", "20160304", "710010001", "20160401", 90.0),   # 710010008 は消えた
+        row("t_ALL20160304.csv", "20160304", "710010002", "20160401"),
+        row("t_ALL20171130.zip", "20171130", "710010001", "20160401", 90.0),
+        row("t_ALL20171130.zip", "20171130", "710010003", "20170701"),          # 最新の全件ファイルにだけある
+    ]
+    sidx = SskIndex(rows)
+    assert sidx.abolish_source.get("710010008") == "snapshot"
+    assert sidx.hist["710010008"][-1] == ("2016-04-01", (100.0, "", "名称710010008", "基本710010008", "2", "001",
+                                                         "2016-03-31"))
+    assert sidx.at("710010008", "2016-03-01")[6] == ""
+    assert "710010002" in sidx.removed and "710010001" not in sidx.removed and "710010003" not in sidx.removed

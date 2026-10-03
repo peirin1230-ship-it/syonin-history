@@ -332,6 +332,10 @@ details.ph li.out { color: var(--ink-3); }
   const mname = v => String(v[4] || v[3] || "").normalize("NFKC");
   const codeName = c => { const v = codeLast(c); return v ? mname(v) : ""; };
   const codeAbol = c => { const v = codeLast(c); return v ? v[7] : ""; };
+  // 廃止年月日がマスターに無く、全件ファイルから消えた時期から推定した廃止
+  const abolInferred = c => { const v = codeLast(c); return !!(v && v[7] && v[8] === "snapshot"); };
+  const RECEDEN = "https://peirin1230-ship-it.github.io/receden-history/#/T/";
+  const INF_TITLE = "廃止年月日がマスターに記録されないまま全件ファイルから消えたため、消えた時期（改定の施行日の前日）を廃止日とみなしています";
   const codeFirst = c => { const h = D.codes[c]; return h ? h[0][0] : ""; };
   // 廃止後の版は価格が 0 になるので、最後に設定されていた価格を使う
   const lastPrice = c => { const h = D.codes[c] || []; for (let i = h.length - 1; i >= 0; i--) if (h[i][1]) return h[i][1]; return null; };
@@ -441,7 +445,7 @@ details.ph li.out { color: var(--ink-3); }
     const curRows = a[7].map(c => {
       const cuRow = ((D.cu || {})[no] || []).find(u => u[0] === c.code);
       const succ = c.abolished && cuRow && cuRow[7] ? `<span class="sub2">後継: ${cuRow[7].split(",").map(clink).join("、")}</span>` : "";
-      const st = c.abolished ? `<span class="pill bad">${esc(c.abolished)} 廃止</span>${succ}` : c.code ? "" : `<span class="pill warn">マスター未対応</span>`;
+      const st = c.abolished ? `<span class="pill bad"${c.code && abolInferred(c.code) ? ` title="${INF_TITLE}"` : ""}>${esc(c.abolished)} 廃止${c.code && abolInferred(c.code) ? "（推定）" : ""}</span>${succ}` : c.code ? "" : `<span class="pill warn">マスター未対応</span>`;
       const diff = c.price_now && c.price_listed != null && Math.abs(c.price_now - c.price_listed) >= 0.5
         ? `<span class="sub2">掲載時 ${yen(c.price_listed)}</span>` : "";
       return `<tr><td><span class="pill k">${esc(c.kubun || "")}</span></td>
@@ -547,7 +551,7 @@ details.ph li.out { color: var(--ink-3); }
           ${steps.length ? `<details class="ph"><summary>価格・名称の推移（${steps.length}）</summary><ol>${steps.join("")}</ol></details>` : ""}</td>
         <td><span class="pill k">${esc(u[2] || "—")}</span></td>
         <td class="mono" style="white-space:nowrap">${esc(u[4])} 〜<br>${u[5] ? esc(u[5]) : "現在"}</td>
-        <td>${u[6] ? `<span class="pill ${REASON[u[6]] || ""}">${esc(u[6])}</span>` : ""}${nexts.length ? `<span class="sub2">${nextLabel}: ${nexts.map(clink).join("、")}</span>` : ""}</td>
+        <td>${u[6] ? `<span class="pill ${REASON[u[6]] || ""}"${u[6].startsWith("廃止") && abolInferred(u[0]) ? ` title="${INF_TITLE}"` : ""}>${esc(u[6])}${u[6].startsWith("廃止") && abolInferred(u[0]) ? "（推定）" : ""}</span>` : ""}${nexts.length ? `<span class="sub2">${nextLabel}: ${nexts.map(clink).join("、")}</span>` : ""}</td>
         <td class="r num">${u[8] ? u[8].toLocaleString() : "—"}</td></tr>`;
     }).join("");
     return `<article class="sheet">
@@ -594,7 +598,7 @@ details.ph li.out { color: var(--ink-3); }
     const list = $("#clist");
     if (!f.length) { list.innerHTML = `<div class="empty">該当するレセ電コードがありません。<br>特定器材マスター（平成24年4月以降の全版）に載ったコードが対象です。</div>`; return; }
     list.innerHTML = f.slice(0, cshown).map(r => {
-      const st = r.abol && r.abol <= today ? `${r.abol} 廃止` : r.abol ? `${r.abol} 廃止予定` : "現行";
+      const st = r.abol && r.abol <= today ? `${r.abol} 廃止${abolInferred(r.c) ? "（推定）" : ""}` : r.abol ? `${r.abol} 廃止予定` : "現行";
       return `<button class="item" type="button" role="listitem" data-code="${esc(r.c)}" aria-current="${curCode === r.c}">
         <span class="no">${esc(r.c)}</span><span class="kb">${esc(st)}・承認番号 ${r.n}</span>
         <span class="nm">${esc(mname(r.v))}</span><span class="ap">別表${esc(r.v[5])}・区分番号 ${esc(r.v[6])}・${yen(r.v[1] || lastPrice(r.c))}</span></button>`;
@@ -625,7 +629,7 @@ details.ph li.out { color: var(--ink-3); }
         }
         if (mname(prev) !== mname(x)) chg.push(`名称変更（旧: ${esc(mname(prev))}）`);
         if (prev[6] !== x[6]) chg.push(`区分番号 ${esc(prev[6])} → ${esc(x[6])}`);
-        if (prev[7] !== x[7]) chg.push(x[7] ? `廃止日 ${esc(x[7])} を設定${!x[1] ? "（価格の設定終了）" : ""}` : "廃止日の取消");
+        if (prev[7] !== x[7]) chg.push(x[7] && x[8] === "snapshot" ? `全件ファイルから削除（廃止日 ${esc(x[7])} は推定）` : x[7] ? `廃止日 ${esc(x[7])} を設定${!x[1] ? "（価格の設定終了）" : ""}` : "廃止日の取消");
         if (!chg.length) chg.push("その他の項目の変更");
       }
       prev = x;
@@ -650,8 +654,9 @@ details.ph li.out { color: var(--ink-3); }
         <div class="sales">${esc(name)}</div>
         <div class="meta">${v ? `<span>別表 <b>${esc(v[5])}</b>・区分番号 <b class="mono">${esc(v[6])}</b></span>
           <span>${first === D.ssk_first ? `収録開始 <b class="mono">${esc(first)}</b> 以前から` : `新設 <b class="mono">${esc(first)}</b>`}</span>
-          <span>${ab ? `${ab <= today ? "廃止" : "廃止予定"} <b class="mono">${esc(ab)}</b>` : "<b>現行</b>"}</span>
+          <span>${ab ? `${ab <= today ? "廃止" : "廃止予定"} <b class="mono">${esc(ab)}</b>${abolInferred(code) ? ` <span class="pill" title="${INF_TITLE}">推定</span>` : ""}` : "<b>現行</b>"}</span>
           <span>${ab && ab <= today ? "最終" : "現在"}の償還価格 <b class="mono">${v[2] ? esc(v[2]) + " " : ""}${yen(v[1] || lastPrice(code))}</b></span>` : ""}</div>
+        <p class="note" style="margin-top:8px"><a href="${RECEDEN}${esc(code)}" target="_blank" rel="noopener">receden-history でこのコードの変更履歴を見る ↗</a></p>
         ${desigNo ? `<p class="note" style="margin-top:8px"><span class="pill k">承認番号指定</span> 承認番号 <button class="clink" type="button" data-no="${esc(desigNo)}">${esc(desigNo)}</button> の製品専用のコードです（C1・C2の新機能区分。次の改定で告示の機能区分に入るまで使われます）。</p>` : ""}
         ${rel ? `<div class="note" style="margin-top:8px">${rel}</div>` : ""}
       </article>
@@ -664,7 +669,7 @@ details.ph li.out { color: var(--ink-3); }
       <article class="sheet">
         <h3>特定器材マスターでの履歴 <small>新しい順・${(h || []).length} 版</small></h3>
         <div class="tbl-wrap"><table class="mh"><thead><tr><th>変更年月日</th><th class="r">償還価格</th><th>変更内容</th><th>名称（基本漢字名称）</th></tr></thead><tbody>${hist}</tbody></table></div>
-        <p class="note" style="margin-top:8px">支払基金（現・医療情報基盤・診療報酬審査支払機構）の特定器材マスター（平成24年4月以降の全版）から、価格・名称・区分番号・廃止日の変化を抜き出しています。</p>
+        <p class="note" style="margin-top:8px">支払基金（現・医療情報基盤・診療報酬審査支払機構）の特定器材マスター（平成24年4月以降の全版。<a href="https://github.com/peirin1230-ship-it/receden-history" target="_blank" rel="noopener">receden-history</a> にしかない全件ファイルを含む）から、価格・名称・区分番号・廃止日の変化を抜き出しています。廃止年月日の記録が無いまま全件ファイルから消えたコードは、消えた時期から廃止日を推定しています。</p>
       </article>`;
     try { history.replaceState(null, "", "#c-" + code); } catch (e) {}
     if (window.matchMedia("(max-width: 860px)").matches) $("#cdetail").scrollIntoView({ behavior: "smooth", block: "start" });
@@ -699,7 +704,7 @@ details.ph li.out { color: var(--ink-3); }
         <h3>このデータについて</h3>
         <p>厚生労働省「医療機器の保険適用について」（毎月の保医発通知、一部訂正・差替を含む）のうち、B・C区分（特定保険医療材料）として掲載された行を承認番号ごとにまとめています。償還価格の改定・機能区分の廃止は、支払基金（現・医療情報基盤・診療報酬審査支払機構）の特定器材マスター全版と照合して表示しています。</p>
         <p>平成20〜28年度前半の通知はスキャン画像のため、OCR（文字認識）で読み取っています。承認番号と製品コードは既知の番号と照合して補正し、機能区分は区分番号と価格から当時の特定器材マスターの区分に当てています。これらの掲載には <span class="pill warn">OCR</span> の印を付けています。誤読が残っている可能性があるので、出典PDFで確認してください。この時期の古い様式の訂正通知（「項目／誤／正」を文章で書く形式）は反映していません。</p>
-        <p>レセ電コード（特定器材コード、9桁）は、掲載された機能区分を特定器材マスターに対応付けて求めています。承認番号ごとのページに、使ったコードとその期間（初掲載〜別の機能区分への移行・コード廃止）を、「レセ電コードで探す」にコードごとの価格・名称の履歴と使用した承認番号を表示しています。C1・C2の新機能区分で使われる「指定承認番号」付きのコードは、その承認番号に優先して当てています。</p>
+        <p>レセ電コード（特定器材コード、9桁）は、掲載された機能区分を特定器材マスターに対応付けて求めています。承認番号ごとのページに、使ったコードとその期間（初掲載〜別の機能区分への移行・コード廃止）を、「レセ電コードで探す」にコードごとの価格・名称の履歴と使用した承認番号を表示しています。C1・C2の新機能区分で使われる「指定承認番号」付きのコードは、その承認番号に優先して当てています。コードごとの変更履歴は <a href="https://peirin1230-ship-it.github.io/receden-history/" target="_blank" rel="noopener">receden-history</a>（レセ電コード変更履歴）と突き合わせて確認しています。</p>
         <p>A1（包括）・A2（特定包括）は含みません。機能区分とマスターの対応は名称の類似度と価格で自動判定しているため、「マスター未対応」の行は通知の表記をそのまま表示しています。</p>
       </article>`;
     $("#ledger").querySelectorAll(".feed button").forEach(b => b.onclick = () => renderApproval(b.dataset.no));
@@ -710,7 +715,7 @@ details.ph li.out { color: var(--ink-3); }
   const TYPES = ["区分変更", "機能区分の変更", "機能区分の追加", "価格差", "新規", "製品名変更", "販売名変更", "製品追加", "変更なし"];
   const TYPE_NOTE = {
     "新規": "この通知で初めてB・C区分に掲載された承認番号",
-    "区分変更": "以前と異なる保険適用区分（例: B1→C1、B1→B2）で掲載",
+    "区分変更": "以前と異なる保険適用区分（例: B1→C1、B1→B2）で掲載（製品追加を伴う掲載は「製品追加」のみ）",
     "機能区分の変更": "既存の製品が同じ区分番号の別の機能区分に移った（改定時の見直しなど）",
     "機能区分の追加": "既存の承認番号に新しい機能区分が加わった",
     "製品追加": "新しい製品コードの追加",

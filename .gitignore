@@ -1,6 +1,6 @@
 # 再取得できる元データ（大きい）
 data/pdf/
-data/ssk/
+# data/ssk/（特定器材マスター）は、支払基金のサイトから消えた古い全件ファイルも残すためコミットする
 data/parsed/*.json
 data/*.log
 data/scanned.json

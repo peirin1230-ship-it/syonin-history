@@ -86,17 +86,11 @@ def step_ssk(p: Paths, log=print) -> None:
     errors: list = []
     files = ssk.list_files(errors=errors)
     ssk.download(files, p.ssk, log=log)
-    log(f"  ファイル {len(files)}件")
-    # 掲載から外れた古いファイル（差し替えられた全件ファイルなど）を消して、新規取得と同じ状態にする。
-    # 一覧ページを1つでも取得できなかったときは消さない
-    if files and not errors:
-        listed = {name for _, name in files}
-        for f in p.ssk.glob("*"):
-            if f.is_file() and f.name not in listed:
-                f.unlink()
-                log(f"  掲載終了のため削除: {f.name}")
-    elif errors:
-        log(f"  一覧を取得できなかったページ: {len(errors)}件")
+    log(f"  ファイル {len(files)}件" + (f"（一覧を取得できなかったページ {len(errors)}件）" if errors else ""))
+    # 支払基金のサイトから消えた古い全件ファイルも data/ssk に残す（コミット対象）。全件ファイルが多いほど、
+    # 「マスターから消えた時期」による廃止日の推定が細かくなる。receden-history にしかない全件ファイルも足す
+    from . import receden
+    receden.import_snapshots(p.ssk, log=log)
 
 
 def parsed_path(p: "Paths", doc_id: str) -> Path:

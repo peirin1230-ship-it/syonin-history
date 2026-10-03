@@ -138,10 +138,10 @@ def build_payload(p: Paths, include_medis: bool) -> dict:
         cu.setdefault(r[0], []).append([r[1], r[2] or "", r[3] or "", r[4] or "", r[5] or "", r[6] or "", r[7] or "",
                                         r[8] or "", r[9] or 0, r[10] or "", r[11] or 0, r[12] or "", r[13] or ""])
     codes: dict[str, list] = {}
-    for r in con.execute("SELECT code, valid_from, price, unit, name, basic_name, beppyo, kubun_no, abolish_date "
-                         "FROM ssk_history ORDER BY code, valid_from"):
+    for r in con.execute("SELECT code, valid_from, price, unit, name, basic_name, beppyo, kubun_no, abolish_date, "
+                         "abolish_source FROM ssk_history ORDER BY code, valid_from"):
         codes.setdefault(r[0], []).append([r[1], r[2], r[3] or "", r[4] or "", r[5] or "", r[6] or "", r[7] or "",
-                                           r[8] or ""])
+                                           r[8] or "", r[9] or ""])
     ssk_first = con.execute("SELECT MIN(valid_from) FROM ssk_history").fetchone()[0]
     payload = {
         "built_at": built[0] if built else "", "span": list(span), "notice_stats": stats,
@@ -246,10 +246,13 @@ def write_excel(p: Paths, path: Path, with_listing: bool = True) -> None:
                           "製品数", "根拠", "コードの種類", "初掲載の通知"], cu,
           [19, 30, 14, 60, 40, 8, 6, 11, 11, 12, 22, 7, 18, 12, 50])
     sh = con.execute("SELECT h.code, h.basic_name, h.name, h.beppyo, h.kubun_no, h.valid_from, h.price, h.unit, "
-                     "h.abolish_date FROM ssk_history h WHERE h.code IN (SELECT DISTINCT code FROM code_usage) "
+                     "h.abolish_date, CASE h.abolish_source WHEN 'snapshot' THEN '推定（全件ファイルから消えた時期）' "
+                     "WHEN 'master' THEN 'マスターの廃止年月日' ELSE '' END "
+                     "FROM ssk_history h WHERE h.code IN (SELECT DISTINCT code FROM code_usage) "
                      "ORDER BY h.code, h.valid_from").fetchall()
     sheet("レセ電コードのマスター履歴", ["レセ電コード（特定器材コード）", "基本名称", "名称", "別表", "区分番号",
-                               "変更年月日", "価格(円)", "単位", "廃止年月日"], sh, [14, 60, 34, 6, 8, 11, 11, 8, 11])
+                               "変更年月日", "価格(円)", "単位", "廃止年月日", "廃止日の根拠"], sh,
+          [14, 60, 34, 6, 8, 11, 11, 8, 11, 22])
     ncs = []
     for r in con.execute("SELECT c.effective_date, n.notice_date, c.approval_no, c.sales_name, c.applicant, c.kubun, "
                          "c.change_types, c.summary, CASE c.ocr WHEN 1 THEN 'OCR' ELSE '' END, n.title, c.detail_json "
