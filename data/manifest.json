@@ -1,5 +1,23 @@
 [
  {
+  "doc_id": "000502880",
+  "title": "「医療機器の保険適用について」の一部訂正について（令和8年9月30日）［140KB］",
+  "url": "https://kouseikyoku.mhlw.go.jp/tokaihokuriku/000502880.pdf",
+  "kind": "correction",
+  "notice_date": "2026-09-30",
+  "effective_date": null,
+  "fiscal_section": "令和8年度通知"
+ },
+ {
+  "doc_id": "000502873",
+  "title": "医療機器の保険適用について（令和8年10月1日から新たに適用）（令和8年9月30日）［346KB］",
+  "url": "https://kouseikyoku.mhlw.go.jp/tokaihokuriku/000502873.pdf",
+  "kind": "notice",
+  "notice_date": "2026-09-30",
+  "effective_date": "2026-10-01",
+  "fiscal_section": "令和8年度通知"
+ },
+ {
   "doc_id": "000500114",
   "title": "医療機器の保険適用について（令和8年9月1日から新たに適用）（令和8年8月31日）［290KB］",
   "url": "https://kouseikyoku.mhlw.go.jp/tokaihokuriku/000500114.pdf",
@@ -3616,14 +3634,5 @@
   "notice_date": "2008-09-30",
   "effective_date": null,
   "fiscal_section": "平成20年度通知"
- },
- {
-  "doc_id": "local_20260930_notice_4",
-  "title": "医療機器の保険適用について（令和8年10月1日から新たに適用）（令和8年9月30日）［手元PDF・保医発0930第4号］",
-  "url": "",
-  "kind": "notice",
-  "notice_date": "2026-09-30",
-  "effective_date": "2026-10-01",
-  "fiscal_section": "手元PDF（厚生局に未掲載）"
  }
 ]
