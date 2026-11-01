@@ -3634,5 +3634,23 @@
   "notice_date": "2008-09-30",
   "effective_date": null,
   "fiscal_section": "平成20年度通知"
+ },
+ {
+  "doc_id": "local_20261030_notice_2",
+  "title": "医療機器の保険適用について（令和8年11月1日から新たに適用）（令和8年10月30日）［手元PDF・保医発1030第2号］",
+  "url": "",
+  "kind": "notice",
+  "notice_date": "2026-10-30",
+  "effective_date": "2026-11-01",
+  "fiscal_section": "手元PDF（厚生局に未掲載）"
+ },
+ {
+  "doc_id": "local_20261030_correction_4",
+  "title": "医療機器の保険適用についての一部訂正（令和8年10月30日）［手元PDF・保医発0930第4号］",
+  "url": "",
+  "kind": "correction",
+  "notice_date": "2026-10-30",
+  "effective_date": null,
+  "fiscal_section": "手元PDF（厚生局に未掲載）"
  }
 ]
