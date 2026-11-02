@@ -20,6 +20,41 @@ class Paths:
         self.manifest = self.data / "manifest.json"
         self.db = self.data / "syonin.sqlite"
         self.out = root / "output"
+        self.docs = root / "docs"
+        # 手元PDFから取り込んだ通知（add-pdf）のPDF。厚生局に未掲載で取得元URLが無いため、GitHub Pages
+        # （docs/）に置いてビューアからリンクする（data/pdf/ は Git に含めないので、こちらをコミットする）
+        self.local_pdf = self.docs / "pdf"
+
+
+def local_pdf_path(p: Paths, doc_id: str) -> Path:
+    return p.local_pdf / f"{doc_id}.pdf"
+
+
+def sync_local_pdfs(p: Paths, log=print) -> None:
+    """手元PDFの通知のPDFを data/pdf/（解析用）と docs/pdf/（公開用）の両方にそろえる。
+
+    - data/pdf/ にしか無い（このコマンドの追加前に add-pdf した）→ docs/pdf/ にコピー
+    - docs/pdf/ にしか無い（新しく clone した環境）→ data/pdf/ にコピー（再解析できるように）
+    - manifest に無くなった手元PDF（公式版に置き換わった）→ docs/pdf/ から削除
+    """
+    import shutil
+    if not p.manifest.exists():
+        return
+    local = {m.doc_id for m in fetch.load_manifest(p.manifest) if m.doc_id.startswith(fetch.LOCAL_PREFIX)}
+    for d in sorted(local):
+        src, pub = p.pdf / f"{d}.pdf", local_pdf_path(p, d)
+        if src.exists() and not pub.exists():
+            pub.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(src, pub)
+            log(f"  手元PDFを公開用に配置: {pub.relative_to(p.root)}")
+        elif pub.exists() and not src.exists():
+            src.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(pub, src)
+    if p.local_pdf.exists():
+        for f in p.local_pdf.glob(f"{fetch.LOCAL_PREFIX}*.pdf"):
+            if f.stem not in local:
+                f.unlink()
+                log(f"  公式版に置き換わった手元PDFを削除: {f.relative_to(p.root)}")
 
 
 def step_fetch(p: Paths, index_url: str = fetch.DEFAULT_INDEX_URL, log=print) -> list[fetch.NoticeLink]:
@@ -31,7 +66,7 @@ def step_fetch(p: Paths, index_url: str = fetch.DEFAULT_INDEX_URL, log=print) ->
     official = {fetch.same_notice_key(m) for m in links}
     replaced = [m for d, m in old.items() if d.startswith(fetch.LOCAL_PREFIX) and fetch.same_notice_key(m) in official]
     for m in replaced:
-        for f in (parsed_path(p, m.doc_id), p.pdf / f"{m.doc_id}.pdf"):
+        for f in (parsed_path(p, m.doc_id), p.pdf / f"{m.doc_id}.pdf", local_pdf_path(p, m.doc_id)):
             f.unlink(missing_ok=True)
         log(f"  手元PDFの通知を公式版に置換: {m.title[:50]}")
     drop = {x.doc_id for x in links} | {m.doc_id for m in replaced}
@@ -40,6 +75,7 @@ def step_fetch(p: Paths, index_url: str = fetch.DEFAULT_INDEX_URL, log=print) ->
     fetch.save_manifest(merged, p.manifest)
     n_local = sum(1 for m in merged if m.doc_id.startswith(fetch.LOCAL_PREFIX))
     log(f"  通知 {len(links)}本（新規 {len(new)}本）" + (f"／厚生局に未掲載で手元PDFから取込済み {n_local}本" if n_local else ""))
+    sync_local_pdfs(p, log=log)
     # 解析済み（キャッシュが現行バージョン）の通知はPDFを再取得しない
     need = []
     for m in merged:
@@ -72,12 +108,16 @@ def step_add_pdf(p: Paths, pdf_path: Path, log=print) -> fetch.NoticeLink:
     fetch.save_manifest(manifest, p.manifest)
     p.pdf.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(pdf_path, p.pdf / f"{link.doc_id}.pdf")
+    # ビューアから開けるように公開用（docs/pdf/）にも置く
+    p.local_pdf.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(pdf_path, local_pdf_path(p, link.doc_id))
     p.parsed.mkdir(parents=True, exist_ok=True)
     doc_id, n, scanned, err = _parse_one((str(p.pdf / f"{link.doc_id}.pdf"), str(parsed_path(p, link.doc_id)),
                                           link.doc_id, link.effective_date))
     log(f"手元PDFを取込: {link.title}")
     log(f"  doc_id {doc_id} / 種類 {link.kind} / 通知日 {link.notice_date} / 適用日 {link.effective_date} / "
         f"{'スキャン画像（要OCR）' if scanned else f'{n}行'}" + (f" / エラー {err}" if err else ""))
+    log(f"  PDF → {local_pdf_path(p, link.doc_id).relative_to(p.root)}（ビューアからリンク）")
     return link
 
 

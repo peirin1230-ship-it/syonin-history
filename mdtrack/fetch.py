@@ -99,7 +99,7 @@ def download_all(links: list[NoticeLink], pdf_dir: Path, delay: float = 1.0,
     got = []
     for ln in links:
         dest = pdf_dir / f"{ln.doc_id}.pdf"
-        if dest.exists() and dest.stat().st_size > 0:
+        if (dest.exists() and dest.stat().st_size > 0) or not ln.url:  # URL が無い＝手元PDFから取込（add-pdf）
             continue
         for attempt in range(3):
             try:

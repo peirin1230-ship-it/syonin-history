@@ -4,12 +4,13 @@ from __future__ import annotations
 import base64
 import gzip
 import json
+import os
 import re
 import sqlite3
 from datetime import date
 from pathlib import Path
 
-from .pipeline import Paths
+from .pipeline import Paths, local_pdf_path, sync_local_pdfs
 
 
 def _con(p: Paths) -> sqlite3.Connection:
@@ -75,7 +76,27 @@ def medis_compare(p: Paths, con: sqlite3.Connection) -> dict:
 
 
 # ---------------------------------------------------------------------------
-def build_payload(p: Paths, include_medis: bool) -> dict:
+# GitHub Pages の公開URL（リポジトリのルートを公開。ビューアは docs/index.html）
+PAGES_URL = "https://peirin1230-ship-it.github.io/syonin-history/"
+
+
+def notice_url(p: Paths, doc_id: str, url: str | None, html_dir: Path | None) -> str:
+    """通知PDFへのリンク先。厚生局の取得元URLが無い手元PDFの通知は、docs/pdf/ に置いた PDF を指す。
+
+    html_dir（ビューアHTMLの置き場所）があればそこからの相対パス（GitHub Pages でもローカルでも開ける）、
+    無ければ（Artifact 公開用の断片など）GitHub Pages の絶対URL。PDF が無ければ空（リンクなし）。
+    """
+    if url:
+        return url
+    f = local_pdf_path(p, doc_id)
+    if not f.exists():
+        return ""
+    if html_dir is None:
+        return PAGES_URL + f.relative_to(p.root).as_posix()
+    return Path(os.path.relpath(f, html_dir)).as_posix()
+
+
+def build_payload(p: Paths, include_medis: bool, html_dir: Path | None = None) -> dict:
     con = _con(p)
     aps = []
     for r in con.execute("SELECT * FROM approvals ORDER BY approval_no"):
@@ -91,7 +112,7 @@ def build_payload(p: Paths, include_medis: bool) -> dict:
                          "GROUP_CONCAT(DISTINCT category_no) FROM listing WHERE product_code IS NOT NULL "
                          "GROUP BY approval_no, product_code ORDER BY approval_no, MIN(effective_date)"):
         prods.setdefault(r[0], []).append([r[1], r[2] or "", r[3] or "", r[4] or ""])
-    docs = {r["doc_id"]: [r["title"], r["url"], r["notice_date"], r["kind"]]
+    docs = {r["doc_id"]: [r["title"], notice_url(p, r["doc_id"], r["url"], html_dir), r["notice_date"], r["kind"]]
             for r in con.execute("SELECT doc_id, title, url, notice_date, kind FROM notices")}
     stats = dict(con.execute("SELECT status, COUNT(*) FROM notices GROUP BY status").fetchall())
     span = con.execute("SELECT MIN(effective_date), MAX(effective_date) FROM listing").fetchone()
@@ -128,8 +149,8 @@ def build_payload(p: Paths, include_medis: bool) -> dict:
     for r in con.execute("SELECT n.doc_id, n.notice_date, MIN(c.effective_date), n.kind, n.title, n.url, n.status "
                          "FROM notices n JOIN notice_changes c USING(doc_id) GROUP BY n.doc_id "
                          "ORDER BY MIN(c.effective_date) DESC, n.notice_date DESC"):
-        notices.append([r[0], r[1] or "", r[2] or "", r[3], r[4], r[5], r[6], counts.get(r[0], {}),
-                        len(nchanges.get(r[0], []))])
+        notices.append([r[0], r[1] or "", r[2] or "", r[3], r[4], notice_url(p, r[0], r[5], html_dir), r[6],
+                        counts.get(r[0], {}), len(nchanges.get(r[0], []))])
     # レセ電コード（特定器材コード）: 承認番号ごとの使用期間と、コードごとのマスター履歴
     cu: dict[str, list] = {}
     for r in con.execute("SELECT approval_no, code, setting, kubun, category, since, until, end_reason, next_codes, "
@@ -160,7 +181,7 @@ def _encode(payload: dict) -> str:
 def write_viewer(p: Paths, path: Path, include_medis: bool, fragment: bool = False) -> int:
     """ビューアHTMLを書き出す。fragment=True はドキュメント骨格なし（Artifact 公開用）。"""
     tpl = (Path(__file__).parent / "viewer_template.html").read_text(encoding="utf-8")
-    b64 = _encode(build_payload(p, include_medis))
+    b64 = _encode(build_payload(p, include_medis, html_dir=None if fragment else path.parent))
     body = tpl.replace("__DATA_B64__", b64)
     if fragment:
         html = body
@@ -294,6 +315,7 @@ def write_excel(p: Paths, path: Path, with_listing: bool = True) -> None:
 
 def export_all(p: Paths, log=print) -> None:
     p.out.mkdir(parents=True, exist_ok=True)
+    sync_local_pdfs(p, log=log)  # 手元PDFの通知のPDFを docs/pdf/ に置く（ビューアからリンク）
     n = write_viewer(p, p.out / "viewer.html", include_medis=True)
     log(f"  → {p.out / 'viewer.html'}（{n / 1e6:.1f}MB、MEDIS突合せ含む・ローカル用）")
     n = write_viewer(p, p.root / "docs" / "index.html", include_medis=False)
